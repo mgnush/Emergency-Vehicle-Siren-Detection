@@ -67,15 +67,8 @@ int main()
 	}
 	sf_close(policeSiren);
 
-	// Split up sound file
 	int nWindow = fullWindow * fs;
 	double *windows[W];
-	for (int i = 0; i < W; i++) {
-		windows[i] = (double*)malloc(sizeof(double) * nWindow);
-		for (int j = 0; j < channels * nWindow; j += channels) {
-			windows[i][j] = data[(i*nWindow) + j];
-		}
-	}
 
 	// Set up multithresholding
 	int bandIndeces[BANDS+1] = { 0 };   // Band limit values (fft index)
@@ -97,60 +90,65 @@ int main()
 	//printf("The indeces are %d, %d, %d, %d, %d \n", bandIndeces[0], bandIndeces[1], bandIndeces[2], bandIndeces[3], bandIndeces[4]);
 
 	// Set up FFT
-	double *in; 
-	fftw_complex *out;   // Complex 1D, n/2-1 length output
-	fftw_plan p;
-	in = (double*) malloc(sizeof(double) * 2 * (n / 2 - 1));
-	out = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * 2 * (n / 2 - 1));   // In-place fft requires in and out to accomodate two out-arrays
-	p = fftw_plan_dft_r2c_1d(n, in, out, FFTW_ESTIMATE); // MEASURE consumes extra time on initial plan execution. ESTIMATE has no initial timecost.
-	
-	// Fill input from data
-	for (long i = 0; i < (channels*n); i+=channels) {
-		in[i >> (channels>>1)] = data[i];   // Ignore all channels but channel 0 NB: CANT HAVE UNEVEN NUMBER OF CHANNELS
-	}
-
-	fftw_execute(p); // Repeatable
-
-	// Check output
-	writeToFile("fftresults.txt", out);
-
-	// Evaluate output
-	// Obtain absolute, normalised FFT
-	double *absFFT = (double*)malloc(sizeof(double) * (n / 2 - 1));
-	absFFT[0] = out[0][0]/n;
-	for (long i = 1; i < (n / 2 - 1); i++) {
-		absFFT[i] = 2*sqrt(pow(out[i][0], 2) + pow(out[i][1],2))/n;
-	}
-	// Obtain noise levels
-	double totalNoise = 0;
-	for (long i = noiseIndexLowMin; i < noiseIndexLowMax; i++) {
-		totalNoise += absFFT[i];
-	}
-	for (long i = noiseIndexHighMin; i < noiseIndexHighMax; i++) {
-		totalNoise += absFFT[i];
-	}
-	double noiseThresh = noiseMultiplier * totalNoise / ((noiseIndexLowMax - noiseIndexLowMin) + (noiseIndexHighMax - noiseIndexHighMin));
-	// Obtain BoI (Bands of Interest) levels
-	double totalVol[BANDS] = { 0 };
-	double avgVol[BANDS] = { 0 };
-	int detections = 0;
-	for (int i = 0; i < BANDS; i++) {
-		for (int j = bandIndeces[i]; j < bandIndeces[i + 1]; j++) {
-			totalVol[i] += absFFT[j];
-		}
-		avgVol[i] = totalVol[i] / bandLength;
-		detection[i] = (avgVol[i] >= noiseThresh);
-		detections += detection[i];
-	}
-
-	printf("The noise threshold is %f, the band averages are: %f, %f, %f, %f \n", noiseThresh, avgVol[0], avgVol[1], avgVol[2], avgVol[3]);
-	printf("The siren is present in %d out of %d bands \n", detections, BANDS);
-
-
-	fftw_destroy_plan(p);
-	fftw_free(out); free(data); free(absFFT);   //in is destroyed by plan execution
+	fftw_complex *out[W];   // Complex 1D, n/2-1 length output
+	fftw_plan p[W];
+	double *absFFT[W];
 	for (int i = 0; i < W; i++) {
-		free(windows[i]);
+		windows[i] = (double*)malloc(sizeof(double) * 2 * (nWindow / 2 - 1));
+		out[i] = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * 2 * (nWindow / 2 - 1));   // In-place fft requires in and out to accomodate two out-arrays
+		p[i] = fftw_plan_dft_r2c_1d(nWindow, windows[i], out[i], FFTW_ESTIMATE); // MEASURE consumes extra time on initial plan execution. ESTIMATE has no initial timecost.
+		absFFT[i] = (double*)malloc(sizeof(double) * (nWindow / 2 - 1));
+		// Split up sound file
+		for (int j = 0; j < channels * nWindow; j += channels) {
+			windows[i][j >> (channels >> 1)] = data[(i*nWindow) + j]; // Ignore all channels but channel 0 NB: CANT HAVE UNEVEN NUMBER OF CHANNELS
+		}
+	}
+
+	for (int i = 0; i < W; i++) {
+		fftw_execute(p[i]); // Repeatable
+	}
+
+	// Detection
+	double avgVol[W][BANDS];
+	
+	for (int i = 0; i < W; i++) {
+		// Obtain absolute, normalised FFT
+		absFFT[i][0] = out[i][0][0] / nWindow;
+		for (long j = 1; j < (nWindow / 2 - 1); j++) {
+			absFFT[i][j] = 2 * sqrt(pow(out[i][j][0], 2) + pow(out[i][j][1], 2)) / nWindow;
+		}
+		// Obtain noise levels
+		double totalNoise = 0;
+		for (long j = noiseIndexLowMin; j < noiseIndexLowMax; j++) {
+			totalNoise += absFFT[i][j];
+		}
+		for (long j = noiseIndexHighMin; j < noiseIndexHighMax; j++) {
+			totalNoise += absFFT[i][j];
+		}
+		double noiseThresh = noiseMultiplier * totalNoise / ((noiseIndexLowMax - noiseIndexLowMin) + (noiseIndexHighMax - noiseIndexHighMin));
+		// Obtain BoI (Bands of Interest) levels
+		double totalVol[BANDS] = { 0 };
+		int detections = 0;
+		for (int j = 0; j < BANDS; j++) {
+			for (int k = bandIndeces[j]; k < bandIndeces[j + 1]; k++) {
+				totalVol[j] += absFFT[i][k];
+			}
+			avgVol[i][j] = totalVol[j] / bandLength;
+			detection[j] = (avgVol[i][j] >= noiseThresh);
+			detections += detection[j];
+		}
+		printf("The noise threshold is %f, the band averages are: %f, %f, %f, %f \n", noiseThresh, avgVol[i][0], avgVol[i][1], avgVol[i][2], avgVol[i][3]);
+		printf("The siren is present in %d out of %d bands \n", detections, BANDS);
+	}
+
+
+
+	
+	 free(data);    //in is destroyed by plan execution
+	for (int i = 0; i < W; i++) {
+		fftw_destroy_plan(p[i]);
+		fftw_free(out[i]);
+		free(absFFT[i]);
 	}
 	
 	printf("Test was succesful. Somewhat. \n");
