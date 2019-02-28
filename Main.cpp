@@ -11,7 +11,7 @@
 
 // Extreme doppler effect coefficients
 const double DOPPLER_MIN = 0.8491;
-const double DOPPLER_MAX = 1.1777;
+const double DOPPLER_MAX = 1.0425;
 // Define doppler-adjusted frequency band of interest
 const double threshLow = 700 * DOPPLER_MAX;
 const double threshHigh = 1500 * DOPPLER_MIN;
@@ -23,6 +23,9 @@ const double noiseThreshHighMax = 3000;
 // Number of bands for multithresholding
 const int BANDS = 4;
 const int noiseMultiplier = 3;
+// Sampling constants
+const double fullWindow = 2.058; // Seconds
+const int W = 2; // Number of windows to keep
 
 void writeToFile(const char* fileName, fftw_complex *&data) 
 {
@@ -64,11 +67,21 @@ int main()
 	}
 	sf_close(policeSiren);
 
+	// Split up sound file
+	int nWindow = fullWindow * fs;
+	double *windows[W];
+	for (int i = 0; i < W; i++) {
+		windows[i] = (double*)malloc(sizeof(double) * nWindow);
+		for (int j = 0; j < channels * nWindow; j += channels) {
+			windows[i][j] = data[(i*nWindow) + j];
+		}
+	}
+
 	// Set up multithresholding
 	int bandIndeces[BANDS+1] = { 0 };   // Band limit values (fft index)
 	int detection[BANDS] = { 0 }; // Multithreshold detection results
 	// Find array indeces
-	double df = (double)fs / (double)n;
+	double df = (double)fs / (double)nWindow;
 	bandIndeces[0] = (int)(threshLow / df);
 	bandIndeces[BANDS] = (int)(threshHigh / df);
 	int bandLength = (bandIndeces[BANDS] - bandIndeces[0]) / BANDS;
@@ -81,7 +94,7 @@ int main()
 	int noiseIndexHighMax = (int)(noiseThreshHighMax / df);
 
 	printf("There are %d channels, %d frames, rate is %d, and df=%f \n", channels, n, fs, df);
-	printf("The indeces are %d, %d, %d, %d, %d \n", bandIndeces[0], bandIndeces[1], bandIndeces[2], bandIndeces[3], bandIndeces[4]);
+	//printf("The indeces are %d, %d, %d, %d, %d \n", bandIndeces[0], bandIndeces[1], bandIndeces[2], bandIndeces[3], bandIndeces[4]);
 
 	// Set up FFT
 	double *in; 
@@ -136,6 +149,9 @@ int main()
 
 	fftw_destroy_plan(p);
 	fftw_free(out); free(data); free(absFFT);   //in is destroyed by plan execution
+	for (int i = 0; i < W; i++) {
+		free(windows[i]);
+	}
 	
 	printf("Test was succesful. Somewhat. \n");
 
