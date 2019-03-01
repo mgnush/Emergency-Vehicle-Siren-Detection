@@ -21,8 +21,8 @@ const double noiseThreshLowMax = 510;
 const double noiseThreshHighMin = 1885;
 const double noiseThreshHighMax = 3000;
 // Number of bands for multithresholding
-const int BANDS = 4;
-const int noiseMultiplier = 3;
+const int BANDS = 6;
+const int noiseMultiplier = 2.5;
 // Sampling constants
 const double fullWindow = 2.058; // Seconds
 const int W = 2; // Number of windows to keep
@@ -86,7 +86,7 @@ int main()
 	int noiseIndexHighMin = (int)(noiseThreshHighMin / df);
 	int noiseIndexHighMax = (int)(noiseThreshHighMax / df);
 
-	printf("There are %d channels, %d frames, rate is %d, and df=%f \n", channels, n, fs, df);
+	printf("There are %d channels, %d frames, rate is %d, and df=%f. Window length is %d \n", channels, n, fs, df, nWindow);
 	//printf("The indeces are %d, %d, %d, %d, %d \n", bandIndeces[0], bandIndeces[1], bandIndeces[2], bandIndeces[3], bandIndeces[4]);
 
 	// Set up FFT
@@ -107,6 +107,9 @@ int main()
 	for (int i = 0; i < W; i++) {
 		fftw_execute(p[i]); // Repeatable
 	}
+
+	//writeToFile("fft0.txt", out[0]);
+	//writeToFile("fft1.txt", out[1]);
 
 	// Detection
 	double avgVol[W][BANDS];
@@ -137,13 +140,14 @@ int main()
 			detection[j] = (avgVol[i][j] >= noiseThresh);
 			detections += detection[j];
 		}
-		printf("The noise threshold is %f, the band averages are: %f, %f, %f, %f \n", noiseThresh, avgVol[i][0], avgVol[i][1], avgVol[i][2], avgVol[i][3]);
+		printf("Window %d: The noise threshold is %f, the band averages are:", i, noiseThresh);
+		for (int j = 0; j < BANDS; j++) {
+			printf(" %f ", avgVol[i][j]);
+		}
+		printf("\n");
 		printf("The siren is present in %d out of %d bands \n", detections, BANDS);
 	}
 
-
-
-	
 	 free(data);    //in is destroyed by plan execution
 	for (int i = 0; i < W; i++) {
 		fftw_destroy_plan(p[i]);
