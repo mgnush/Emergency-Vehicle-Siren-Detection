@@ -27,7 +27,7 @@ const int noiseMultiplier = 2.5;
 const double fullWindow = 2.058; // Seconds
 const int W = 2; // Number of windows to keep
 
-void writeToFile(const char* fileName, fftw_complex *&data) 
+void writeToFile(const char* fileName, fftw_complex *&data)
 {
 	std::ofstream myFile;
 	myFile.open(fileName);
@@ -43,7 +43,7 @@ int main()
 	// Open soundfile
 	SNDFILE *policeSiren;
 	SF_INFO sfinfo;
-	const char *fName = "passing_yelp_city.WAV";
+	const char *fName = "police_wail_rec.WAV";
 
 	if (!(policeSiren = sf_open(fName, SFM_READ, &sfinfo))) {
 		printf("Not able to open sound file %s \n", fName);
@@ -60,7 +60,7 @@ int main()
 	data = (double*)malloc(sizeof(double) * channels * n);
 	sf_count_t itemsExpected = channels * n;
 	sf_count_t items = sf_read_double(policeSiren, data, itemsExpected);
-	
+
 	if (itemsExpected != items) {
 		printf("File data error \n");
 		return 1;
@@ -71,7 +71,7 @@ int main()
 	double *windows[W];
 
 	// Set up multithresholding
-	int bandIndeces[BANDS+1] = { 0 };   // Band limit values (fft index)
+	int bandIndeces[BANDS + 1] = { 0 };   // Band limit values (fft index)
 	int detection[BANDS] = { 0 }; // Multithreshold detection results
 	// Find array indeces
 	double df = (double)fs / (double)nWindow;
@@ -112,8 +112,8 @@ int main()
 	//writeToFile("fft1.txt", out[1]);
 
 	// Detection
-	double avgVol[W][BANDS];
-	
+	double avgVol[W][BANDS]; // Store for all windows for debugging purposes
+
 	for (int i = 0; i < W; i++) {
 		// Obtain absolute, normalised FFT
 		absFFT[i][0] = out[i][0][0] / nWindow;
@@ -148,13 +148,13 @@ int main()
 		printf("The siren is present in %d out of %d bands \n", detections, BANDS);
 	}
 
-	 free(data);    //in is destroyed by plan execution
+	free(data);    //in is destroyed by plan execution
 	for (int i = 0; i < W; i++) {
 		fftw_destroy_plan(p[i]);
 		fftw_free(out[i]);
 		free(absFFT[i]);
 	}
-	
+
 	printf("Test was succesful. Somewhat. \n");
 
 	system("PAUSE");
