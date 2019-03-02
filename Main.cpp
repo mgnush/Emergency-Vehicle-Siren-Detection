@@ -31,9 +31,9 @@ const int BANDS = 6;
 const int noiseMultiplier = 2.5;
 // Sampling constants
 const double fullWindow = 2.058; // Seconds
-const int W = 4; // Number of windows to keep
+const int W = 2; // Number of windows to keep
 // Directionality constants
-const int SPLIT = 1;
+const int SPLIT = 2;
 const double subWindow = fullWindow / SPLIT;
 const int SW = SPLIT * W;
 
@@ -53,10 +53,18 @@ struct multiThresholdIndeces {
 	int noiseIndexHighMax;
 };
 
+struct fftVars {
+	double *window;
+	fftw_complex *out;   
+	fftw_plan p;
+	double *absFFT;
+};
+
 struct fftAnalysis {
 	double bandAvgs[BANDS];
 	double noiseThresh;
 };
+
 
 void fftToFile(const char* fileName, fftw_complex *&data)
 {
@@ -123,37 +131,37 @@ multiThresholdIndeces setupMultiThresholding(const int &n, const int &fs) {
 	return mtIndeces;
 }
 
-fftAnalysis doFFT(const rec_data &rec, const multiThresholdIndeces &mtIndeces, const int &nWindow, int i) {
-	fftAnalysis fftAnal;
-	double *window;
-	fftw_complex *out;   // Complex 1D, n/2-1 length output
-	fftw_plan p;
-	double *absFFT;
+fftVars setupFFT(const int &nWindow) {
+	fftVars vars;
+	vars.window = (double*)malloc(sizeof(double) * 2 * (nWindow / 2 - 1));
+	vars.out = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * 2 * (nWindow / 2 - 1));   // In-place fft requires in and out to accomodate two out-arrays   // Complex 1D, n/2-1 length output
+	vars.p = fftw_plan_dft_r2c_1d(nWindow, vars.window, vars.out, FFTW_ESTIMATE); // MEASURE consumes extra time on initial plan execution. ESTIMATE has no initial timecost.
+	vars.absFFT = (double*)malloc(sizeof(double) * (nWindow / 2 - 1));	
 
-	window = (double*)malloc(sizeof(double) * 2 * (nWindow / 2 - 1));
-	out = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * 2 * (nWindow / 2 - 1));   // In-place fft requires in and out to accomodate two out-arrays
-	p = fftw_plan_dft_r2c_1d(nWindow, window, out, FFTW_ESTIMATE); // MEASURE consumes extra time on initial plan execution. ESTIMATE has no initial timecost.
-	absFFT = (double*)malloc(sizeof(double) * (nWindow / 2 - 1));
+	return vars;
+}
+
+fftAnalysis doFFT(fftVars vars, const rec_data &rec, const multiThresholdIndeces &mtIndeces, const int &nWindow, int i) {
+	fftAnalysis fftAnal;
 	// SPLIT up sound file
 	for (int j = 0; j < rec.channels * nWindow; j += rec.channels) {
-		window[j >> (rec.channels >> 1)] = rec.samples[i*nWindow + j]; // Ignore all channels but channel 0 NB: CANT HAVE UNEVEN NUMBER OF CHANNELS
+		vars.window[j >> (rec.channels >> 1)] = rec.samples[i*nWindow + j]; // Ignore all channels but channel 0 NB: CANT HAVE UNEVEN NUMBER OF CHANNELS
 	}
-
-	fftw_execute(p); // Repeatable
+	fftw_execute(vars.p); // Repeatable
 
 	// Obtain absolute, normalised FFT
-	absFFT[0] = out[0][0] / nWindow;
+	vars.absFFT[0] = vars.out[0][0] / nWindow;
 	for (long j = 1; j < (nWindow / 2 - 1); j++) {
-		absFFT[j] = 2 * sqrt(pow(out[j][0], 2) + pow(out[j][1], 2)) / nWindow;
+		vars.absFFT[j] = 2 * sqrt(pow(vars.out[j][0], 2) + pow(vars.out[j][1], 2)) / nWindow;
 	}
 
 	// Obtain noise levels
 	double totalNoise = 0;
 	for (long j = mtIndeces.noiseIndexLowMin; j < mtIndeces.noiseIndexLowMax; j++) {
-		totalNoise += absFFT[j];
+		totalNoise += vars.absFFT[j];
 	}
 	for (long j = mtIndeces.noiseIndexHighMin; j < mtIndeces.noiseIndexHighMax; j++) {
-		totalNoise += absFFT[j];
+		totalNoise += vars.absFFT[j];
 	}
 	fftAnal.noiseThresh = noiseMultiplier * totalNoise / ((mtIndeces.noiseIndexLowMax - mtIndeces.noiseIndexLowMin) + (mtIndeces.noiseIndexHighMax - mtIndeces.noiseIndexHighMin));
 
@@ -162,14 +170,10 @@ fftAnalysis doFFT(const rec_data &rec, const multiThresholdIndeces &mtIndeces, c
 
 	for (int j = 0; j < BANDS; j++) {
 		for (int k = mtIndeces.bandIndeces[j]; k < mtIndeces.bandIndeces[j + 1]; k++) {
-			totalVol[j] += absFFT[k];
+			totalVol[j] += vars.absFFT[k];
 		}
 		fftAnal.bandAvgs[j] = totalVol[j] / mtIndeces.bandLength;
 	}
-
-	fftw_destroy_plan(p);
-	fftw_free(out);
-	free(absFFT);
 
 	// Print for testing
 	printf("Window %d: The noise threshold is %f, and the band averages are", i, fftAnal.noiseThresh);
@@ -192,19 +196,21 @@ int *detect(const fftAnalysis &fftAnal) {
 int main()
 {
 	// Read recording
-	rec_data recording = readRecording("police_wail_rec.wav");
+	rec_data recording = readRecording("police_yelp_rec.wav");
 
 	// --------------------DETECTION----------------\\
 	// Set up Multi-thresholding
 	int nWindow = fullWindow * recording.fs;
 	multiThresholdIndeces mtIndeces = setupMultiThresholding(nWindow, recording.fs);
 
+	fftVars fftV = setupFFT(nWindow); // DO NOT RUN THIS AGAIN
+
 	// Obtain FFT-analysis
 	fftAnalysis fftAnals[W];
 	int *detectedBands[W];
 
 	for (int i = 0; i < W; i++) {
-		fftAnals[i] = doFFT(recording, mtIndeces, nWindow, i);
+		fftAnals[i] = doFFT(fftV, recording, mtIndeces, nWindow, i);
 		// Detection
 		detectedBands[i] = detect(fftAnals[i]);
 	}
@@ -219,7 +225,7 @@ int main()
 	int *detectedBandsDir[SW];
 
 	for (int i = 0; i < SW; i++) {
-		fftAnalsDir[i] = doFFT(recording, mtIndecesDir, nSubWindow, i);
+		fftAnalsDir[i] = doFFT(fftV, recording, mtIndecesDir, nSubWindow, i);
 		// Detection
 		detectedBandsDir[i] = detect(fftAnalsDir[i]);
 	}
@@ -273,14 +279,9 @@ int main()
 	}
 	*/
 	free(recording.samples);    //in is destroyed by plan execution
-
-	/*
-	for (int i = 0; i < SW; i++) {
-		fftw_destroy_plan(pDirction[i]);
-		fftw_free(outDirection[i]);
-		free(absFFTDirection[i]);
-	}
-	*/
+	fftw_destroy_plan(fftV.p);
+	fftw_free(fftV.out);
+	free(fftV.absFFT);
 
 	printf("Test was succesful. Somewhat. \n");
 
