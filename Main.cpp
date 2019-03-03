@@ -196,7 +196,7 @@ int *detect(const fftAnalysis &fftAnal) {
 int main()
 {
 	// Read recording
-	rec_data recording = readRecording("police_yelp_rec.wav");
+	rec_data recording = readRecording("police_wail_rec.wav");
 
 	// --------------------DETECTION----------------\\
 	// Set up Multi-thresholding
