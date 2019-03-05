@@ -19,8 +19,8 @@
 const double DOPPLER_MIN = 0.8491;
 const double DOPPLER_MAX = 1.0425;
 // Define doppler-adjusted frequency band of interest
-const double threshLow = 700 * DOPPLER_MAX;
-const double threshHigh = 1500 * DOPPLER_MIN;
+const double BAND_FREQ_MIN = 700;
+const double BAND_FREQ_MAX = 1550;
 // Frequencies for multithresholding
 const double noiseThreshLowMin = 150;
 const double noiseThreshLowMax = 510;
@@ -28,7 +28,6 @@ const double noiseThreshHighMin = 1885;
 const double noiseThreshHighMax = 3000;
 // Number of bands for multithresholding
 const int BANDS = 6;
-const int noiseMultiplier = 2.5;
 // Sampling constants
 const double fullWindow = 2.058; // Seconds
 const int W = 2; // Number of windows to keep
@@ -110,9 +109,12 @@ rec_data readRecording(const char* fileName) {
 	return data;
 }
 
-multi_thresh_indeces setupMultiThresholding(const int &n, const int &fs) {
+multi_thresh_indeces setupMultiThresholding(const int &n, const int &fs, const int &doppler) {
 
 	multi_thresh_indeces mtIndeces;
+
+	double threshLow = BAND_FREQ_MIN * (1 + (doppler * (DOPPLER_MAX - 1)));
+	double threshHigh = BAND_FREQ_MAX * (1 + (doppler * (DOPPLER_MIN - 1)));
 
 	// Find array indeces
 	double df = (double)fs / (double)n;
@@ -141,7 +143,7 @@ fft_vars setupFFT(const int &nWindow) {
 	return vars;
 }
 
-fft_analysis doFFT(fft_vars vars, const rec_data &rec, const multi_thresh_indeces &mtIndeces, const int &nWindow, int i) {
+fft_analysis doFFT(fft_vars vars, const rec_data &rec, const multi_thresh_indeces &mtIndeces, const int &nWindow, int i, const int noiseMultiplier) {
 	fft_analysis fftAnal;
 	// SPLIT up sound file
 	for (int j = 0; j < rec.channels * nWindow; j += rec.channels) {
@@ -205,14 +207,17 @@ void detect(const fft_analysis &fftAnal, int(&detectedBands)[BANDS]) {
 
 int main()
 {
+	const int noiseMultiplier = 2.5;
+	const int noiseMultiplierDir = 1;
+
 	// Read recording
-	rec_data recording = readRecording("police_yelp_rec.wav");
+	rec_data recording = readRecording("yt_wail_away.wav");
 
 	// --------------------DETECTION----------------\\
 	// Set up Multi-thresholding
 	printf("\nParent windows: \n \n");
 	int nWindow = fullWindow * recording.fs;
-	multi_thresh_indeces mtIndeces = setupMultiThresholding(nWindow, recording.fs);
+	multi_thresh_indeces mtIndeces = setupMultiThresholding(nWindow, recording.fs, 1);
 
 	fft_vars fftV = setupFFT(nWindow); // DO NOT RUN THIS AGAIN
 
@@ -221,7 +226,7 @@ int main()
 	int detectedBands[W][BANDS];
 
 	for (int i = 0; i < W; i++) {
-		fftAnals[i] = doFFT(fftV, recording, mtIndeces, nWindow, i);
+		fftAnals[i] = doFFT(fftV, recording, mtIndeces, nWindow, i, noiseMultiplier);
 		// Detection
 		detect(fftAnals[i], detectedBands[i]);
 	}
@@ -230,70 +235,88 @@ int main()
 	// Set up Multi-thresholding
 	printf("\nSubwindows for direction: \n \n");
 	int nSubWindow = subWindow * recording.fs;
-	multi_thresh_indeces mtIndecesDir = setupMultiThresholding(nSubWindow, recording.fs);
+	multi_thresh_indeces mtIndecesDir = setupMultiThresholding(nSubWindow, recording.fs, 0);
 
 	// Obtain FFT-analysis
 	fft_analysis fftAnalsDir[SW];
 	int detectedBandsDir[SW][BANDS];
 
 	for (int i = 0; i < SW; i++) {
-		fftAnalsDir[i] = doFFT(fftV, recording, mtIndecesDir, nSubWindow, i);
+		fftAnalsDir[i] = doFFT(fftV, recording, mtIndecesDir, nSubWindow, i, noiseMultiplierDir);
 		// Detection
 		detect(fftAnalsDir[i], detectedBandsDir[i]);
 	}
 
-	int parentBandsDetected;
+	//int parentBandsDetected;
 	int count = 0;
-	double Upper_Limit = 1.10;
-	double Lower_Limit = 0.90;
+	double Upper_Limit = 1.02;
+	double Lower_Limit = 0.98;
 
-	for (int i = 0; i < W; i++) {
-		parentBandsDetected = 0;
-		for (int j = 0; j < BANDS; j++) {
-			if (detectedBands[i][j])
+	int parentbandsdetected = 0;
+	int detectedchecker = 0;
+
+	for (int i = 0; i < W; i++)
+	{
+		for (int j = 0; j < BANDS; j++)
+		{
+			detectedchecker = detectedBands[i][j];
+			if (detectedchecker)
 			{
-				printf(" Band %d is detected \"%d\" thus direction is run on split windows\n", j, detectedBands[i][j]);
+				parentbandsdetected++;
+			}
+		}
+	}
+		printf("number of parent bands detected: \n");
+		if (parentbandsdetected > BANDS / W)
+		{
+			for (int j = 0; j < SW; j++) {
+				//if (detectedBands[i][j])
+				//{
+					//printf(" Band %d is detected \"%d\" thus direction is run on split windows\n", j, detectedBands[i][j]);
 
-				for (int k = 1; k < SW; k++)
+				for (int k = 1; k < BANDS; k++)
 				{
-						// taking the ratio of the 1st window and second window and then comparing it to the limits,
-						// if they are within the limit the iteration is skipped, if not the counter is indexed to reflect that
-						double PrevOverPres = (fftAnalsDir[k - 1].bandAvgs[j] / fftAnalsDir[k].bandAvgs[j]);
-						double PresOverPrev = (fftAnalsDir[k].bandAvgs[j] / fftAnalsDir[k - 1].bandAvgs[j]);
-						if ((PrevOverPres < Upper_Limit) && (PrevOverPres > Lower_Limit))
-						{
-							//printf("Skipped because %f \n", PrevOverPres);
-							continue;
-						}
-						if ((PresOverPrev < Upper_Limit) && (PresOverPrev > Lower_Limit))
-						{
-							//printf("Skipped because %f \n", PresOverPrev);
-							continue;
-						}
-						if (PrevOverPres > PresOverPrev)
-						{
-							//printf("Sound is Getting Lower \n");
-							count--;
-						}
-						if (PrevOverPres < PresOverPrev)
-						{
-							//printf("Sound is Getting Louder \n");
-							count++;
-						}
+					double average_past = 0;
+					double average_present = 0;
+					// taking the ratio of the 1st window and second window and then comparing it to the limits,
+					// if they are within the limit the iteration is skipped, if not the counter is indexed to reflect that
+					average_past = fftAnalsDir[j - 1].bandAvgs[k];
+					average_present = fftAnalsDir[j].bandAvgs[k];
+
+					double PrevOverPres = average_past / average_present;
+					double PresOverPrev = average_present / average_past;
+
+					if (average_present > average_past)
+					{
+						printf("moving towards \n");
+					}
+					if (average_present < average_past)
+					{
+						printf("moving away \n");
+					}
+					if ((PresOverPrev < Upper_Limit) && (PresOverPrev > Lower_Limit))
+					{
+						printf("Skipped because %f \n", PresOverPrev);
+						continue;
+					}
+					if ((PrevOverPres < Upper_Limit) && (PrevOverPres > Lower_Limit))
+					{
+						printf("Skipped because hehe %f \n", PrevOverPres);
+						continue;
+					}
+					if (average_past > average_present)
+					{
+						printf("Sound is Getting Lower \n");
+						count--;
+					}
+					if (average_past < average_present)
+					{
+						printf("Sound is Getting Louder \n");
+						count++;
+					}
 				}
 			}
 		}
-
-		printf("%d bands were detected in window %d \n", parentBandsDetected, i);
-	}
-	
-	// setting up a counter to determine wether moving away or towards, the limits are to see if the 2 window averages
-	// are within a certain percentage of each other
-	
-	if (parentBandsDetected > 2 )
-	{
-		// printf("test \n");
-		
 		printf("Due to amount of splits, individual results are omitted. \n");
 		// counter is then compared to see wether it is moving towards or away from mic
 		if (count > 0)
@@ -308,15 +331,17 @@ int main()
 		{
 			printf("Result is inconclusive can't tell if moving away or towards you. Maybe you are the EV :o\n");
 		}
-	}
+
 	
-	free(recording.samples);    //in is destroyed by plan execution
-	fftw_destroy_plan(fftV.p);
-	fftw_free(fftV.out);
-	free(fftV.absFFT);
 
-	printf("Test was succesful. Somewhat. \n");
+		free(recording.samples);    //in is destroyed by plan execution
+		fftw_destroy_plan(fftV.p);
+		fftw_free(fftV.out);
+		free(fftV.absFFT);
 
-	system("PAUSE");
-	return 0;
+		printf("Test was succesful. Somewhat. \n");
+
+		system("PAUSE");
+		return 0;
+	
 }
