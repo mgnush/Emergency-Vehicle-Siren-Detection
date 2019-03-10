@@ -36,7 +36,7 @@ const int W = 2; // Number of windows to keep
 const int SPLIT = 2;
 const double subWindow = fullWindow / SPLIT;
 const int SW = SPLIT * W;
-const double dirMargin = 0.015; // Changes below this magnitude (%) are considered to be inconclusive
+const double dirMargin = 0.02; // Changes below this magnitude (%) are considered to be inconclusive
 
 struct rec_data {
 	int channels;
@@ -289,8 +289,7 @@ int main()
 	// --------------------PARENT----------------\\
 	// Set up Multi-thresholding
 	int nWindow = fullWindow * recording.fs;
-
-	multi_thresh_indeces mtIndeces = setupMultiThresholding(nWindow, recording.fs, true);
+	multi_thresh_indeces mtIndeces = setupMultiThresholding(nWindow, recording.fs, true); // Account doppler
 
 	fft_vars fftV = setupFFT(nWindow); // DO NOT RUN THIS AGAIN
 
@@ -307,7 +306,6 @@ int main()
 	directionParentOnly(fftAnals, detectedBands);
 
 	//---------------------SUB---------------------\\
-	
 	// Set up Multi-thresholding
 	int nSubWindow = subWindow * recording.fs;
 	multi_thresh_indeces mtIndecesDir = setupMultiThresholding(nSubWindow, recording.fs, false); // Ignore doppler
