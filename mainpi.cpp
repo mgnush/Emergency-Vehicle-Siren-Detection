@@ -8,6 +8,7 @@
 #include <chrono>
 #include <iostream>
 #include <fstream>
+#include "display.h"
 
 // Extreme doppler effect coefficients
 const double DOPPLER_MIN = 0.8491;

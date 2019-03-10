@@ -1,23 +1,6 @@
 #include <wiringPi.h>
 
-enum state {
-	no_vehicle,
-	north_incoming,
-	north_outgoing,
-	south_incoming,
-	south_outgoing,
-	west_incoming,
-	west_outgoing,
-	east_incoming,
-	east_outgoing,
-	north,
-	south, 
-	east,
-	west
-};
-
-
-int initialize_pins (void);
+int initialize_pins (void)
 {
 	wiringPiSetup();
 	/* pin 0 controls the middle led, connected to ground*/
@@ -33,11 +16,11 @@ int initialize_pins (void);
 	return 0;
 }
 
-int dispay (state direction)
+int display (state direction)
 {
 	switch(direction)
 	{
-		case 'no_vehicle':
+		case no_ev:
 			pinMode(1, INPUT);
 			pinMode(2, INPUT);
 			pinMode(3, INPUT);
@@ -46,7 +29,7 @@ int dispay (state direction)
 			digitalWrite(0, LOW);
 
 		/* next 8 state turn on 1 led */
-		case 'north_incoming':
+		case north_in:
 			pinMode(1, OUTPUT);
 			pinMode(2, OUTPUT);
 			pinMode(3, INPUT);
@@ -56,7 +39,7 @@ int dispay (state direction)
 			digitalWrite(1, HIGH);
 			digitalWrite(2, LOW);
 
-		case 'north_outgoing':
+		case north_out:
 			pinMode(1, OUTPUT);
 			pinMode(2, INPUT);
 			pinMode(3, OUTPUT);
@@ -65,7 +48,7 @@ int dispay (state direction)
 			digitalWrite(0, HIGH);
 			digitalWrite(1, HIGH);
 			digitalWrite(3, LOW);
-		case 'south_incoming':
+		case south_in:
 			pinMode(1, INPUT);
 			pinMode(2, INPUT);
 			pinMode(3, OUTPUT);
@@ -74,7 +57,7 @@ int dispay (state direction)
 			digitalWrite(0, HIGH);
 			digitalWrite(4, HIGH);
 			digitalWrite(3, LOW);
-		case 'south_outgoing':
+		case south_out:
 			pinMode(1, INPUT);
 			pinMode(2, OUTPUT);
 			pinMode(3, INPUT);
@@ -84,7 +67,7 @@ int dispay (state direction)
 			digitalWrite(4, HIGH);
 			digitalWrite(2, LOW);
 
-		case 'west_incoming':
+		case west_in:
 			pinMode(1, INPUT);
 			pinMode(2, OUTPUT);
 			pinMode(3, OUTPUT);
@@ -94,7 +77,7 @@ int dispay (state direction)
 			digitalWrite(3, HIGH);
 			digitalWrite(2, LOW);
 
-		case 'west_outgoing':
+		case west_out:
 			pinMode(1, OUTPUT);
 			pinMode(2, INPUT);
 			pinMode(3, OUTPUT);
@@ -104,7 +87,7 @@ int dispay (state direction)
 			digitalWrite(3, HIGH);
 			digitalWrite(1, LOW);
 
-		case 'east_incoming':
+		case east_in:
 			pinMode(1, INPUT);
 			pinMode(2, OUTPUT);
 			pinMode(3, INPUT);
@@ -114,7 +97,7 @@ int dispay (state direction)
 			digitalWrite(2, HIGH);
 			digitalWrite(4, LOW);
 
-		case 'east_outgoing':
+		case east_out:
 			pinMode(1, INPUT);
 			pinMode(2, OUTPUT);
 			pinMode(3, OUTPUT);
@@ -126,7 +109,7 @@ int dispay (state direction)
 
 		/* next 4 state turn on 2 leds at a time 
 		to signify location, but not direction*/
-		case 'north';
+		case north:
 			pinMode(1, OUTPUT);
 			pinMode(2, OUTPUT);
 			pinMode(3, OUTPUT);
@@ -137,7 +120,7 @@ int dispay (state direction)
 			digitalWrite(2, LOW);
 			digitalWrite(3, LOW);
 
-		case 'south':
+		case south:
 			pinMode(1, INPUT);
 			pinMode(2, OUTPUT);
 			pinMode(3, OUTPUT);
@@ -145,10 +128,10 @@ int dispay (state direction)
 			
 			digitalWrite(0, HIGH);
 			digitalWrite(4, HIGH);
-			digitalWRite(3, LOW);
+			digitalWrite(3, LOW);
 			digitalWrite(2, LOW);
 
-		case 'east':
+		case east:
 			pinMode(1, INPUT);
 			pinMode(2, OUTPUT);
 			pinMode(3, OUTPUT);
@@ -159,7 +142,7 @@ int dispay (state direction)
 			digitalWrite(3, LOW);
 			digitalWrite(4, LOW);
 
-		case 'west':
+		case west:
 			pinMode(1, OUTPUT);
 			pinMode(2, OUTPUT);
 			pinMode(3, OUTPUT);
