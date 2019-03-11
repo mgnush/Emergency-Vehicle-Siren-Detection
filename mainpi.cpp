@@ -28,6 +28,7 @@ const double NOISE_COEFF[BANDS] = {2.6,2.5,2.8,2.9,2.9,2.8};   //{2.6,2.5,2.6,2.
 const double st = 2.058;   // Sampling time
 const double fs = 8000;   // 8kHz sampling
 const int N = 16464;   // # of samples
+const int N_CH = 3; // # of Mics
 // Testing-tuned microsecond delay to achieve 8kHz sampling
 const int SAMPLE_DELAY = 79;
 // FFT-variables
@@ -79,6 +80,7 @@ void SpiSetup()
 /* Creates a multi_thresh_indeces variable containing the array
  * indeces representing relevant band frequcneis to be used in multithresholding
  * \param[in] n the window length to setup for
+ * \param[in] doppler whether doppler's effect will be accounted for
 */
 multi_thresh_indeces SetupMultiThresholding(const int &n, const bool &doppler)
 {
@@ -108,7 +110,7 @@ multi_thresh_indeces SetupMultiThresholding(const int &n, const bool &doppler)
 
 /* Performs an entire sample window, saving the results in the
  * parameter array of integers. 
- * \param[in] samples[n] The array that will hold all samples
+ * \param[in] *samples The array that will hold all samples for this window
  * \return The time taken to complete the sampling window
 */
 double DoSampling(double *samples)
@@ -146,11 +148,12 @@ fft_vars SetupFFT() {
 
 /* Employs the multi-thresholding scheme and returns an array
  * of average band volumes.
- * \param[in] *ffts The complex fft to be analysed
- * \param[in] bandIndeces[BANDS+1] The fft indeces representing the 
- * 			  border of the bands
- * \param[in] bandLength The width (in indeces) of the bands
- * \return The number of bands in which the siren is present
+ * \param[in] vars The fft variables
+ * \param[in] *samples The samples to be FFT'd
+ * \param[in] mtIndeces The multithresholding variables
+ * \param[in] split Whether the window to analyse is a subwindow
+ * \param[in] i The subwindow to FFT - 0 if parent window
+ * \return The FFT-analysis in the form of multithresholding average band values
 */
 fft_analysis DoFFT(fft_vars vars, const double *samples, const multi_thresh_indeces &mtIndeces, const bool &split, const int &i)
 {
@@ -206,7 +209,12 @@ fft_analysis DoFFT(fft_vars vars, const double *samples, const multi_thresh_inde
 	return fftAnal;
 }
 
-int Detect(const fft_analysis &fftAnal, int(&detectedBands)[BANDS]) {
+/* Runs the detection algorithm on the parameter fft-analysis
+ * \param[in] fftAnal The FFT-analysis
+ * \param[in] detectedBands[BANDS] The array to hold the detection results
+ * \return The number of bands that detected an EV.
+ */
+int Detect(const fft_analysis &fftAnal, int (&detectedBands)[BANDS]) {
 	int detections = 0;
 
 	for (int i = 0; i < BANDS; i++) {
@@ -224,7 +232,11 @@ int Detect(const fft_analysis &fftAnal, int(&detectedBands)[BANDS]) {
 	return detections;
 }
 
-// Compare only parent windows
+/* Runs the direction analysis, comparing two consecutive parent windows
+ * \param[in] fftAnalPrev The FFT-analysis for the first window
+ * \param[in] fftAnalCur The FFT-analysis for the second window
+ * \param[in] detectedBands[2][BANDS] The two detection results
+ */
 void DirectionParentOnly(const fft_analysis fftAnalPrev, fft_analysis fftAnalCur, const int (&detectedBands)[2][BANDS]) {
 	double windowAvgs[2] = { 0 };
 	fft_analysis fftAnals[2] = {fftAnalPrev, fftAnalCur};
@@ -261,8 +273,8 @@ int main()
 	
 	double timeSpan; // Actual sampling time
 	bool firstRunFlag = true; // Prevent 'empty' array from being used
-	double *in[2]; // Store two sampling windows at a time
-	double *inRev;
+	double *in[N_CH][2]; // Store two sampling windows at a time
+	double *inRev[N_CH];
 	in[0] = (double*)malloc(sizeof(double) * N);
 	in[1] = (double*)malloc(sizeof(double) * N);
 	inRev = (double*)malloc(sizeof(double) * N);
