@@ -8,7 +8,7 @@
 #include <chrono>
 #include <iostream>
 #include <fstream>
-#include "display.h"
+//#include "display.h"
 
 // Extreme doppler effect coefficients
 const double DOPPLER_MIN = 0.8491;
@@ -28,9 +28,10 @@ const double NOISE_COEFF[BANDS] = {2.6,2.5,2.8,2.9,2.9,2.8};   //{2.6,2.5,2.6,2.
 const double st = 2.058;   // Sampling time
 const double fs = 8000;   // 8kHz sampling
 const int N = 16464;   // # of samples
-const int N_CH = 3; // # of Mics
+const int N_CH = 2;   // # of Mics
+const char CHANNELS[4] = {0x80,0x90,0xa0,0xb0};   // Code to send to ADC
 // Testing-tuned microsecond delay to achieve 8kHz sampling
-const int SAMPLE_DELAY = 79;
+const int SAMPLE_DELAY = 87; //90;
 // FFT-variables
 const int SPLIT = 4; // Amount of subwindows per parent window
 const bool DOPPLER_PARENT = true;
@@ -59,6 +60,17 @@ struct fft_analysis {
 	double noiseThresh;
 };
 
+void FftPrint(const char* fileName, double *data, const double df)
+{
+	std::ofstream myFile;
+	myFile.open(fileName);
+
+	for (int i = 0; i < N/2-1; i++) {
+		myFile << (double)i*df << ": " << data[i]*(N/2) << "\n";
+	}
+	myFile.close();
+}
+
 /* Configures the SPI communication with the ADC 
 */
 void SpiSetup() 
@@ -72,15 +84,15 @@ void SpiSetup()
 	bcm2835_spi_begin();
 	bcm2835_spi_setBitOrder(BCM2835_SPI_BIT_ORDER_MSBFIRST);
 	bcm2835_spi_setDataMode(BCM2835_SPI_MODE0); // Data comes in on falling edge
-	bcm2835_spi_setClockDivider(BCM2835_SPI_CLOCK_DIVIDER_1024); // 250MHz / 1024 = ~250kHz
+	bcm2835_spi_setClockDivider(BCM2835_SPI_CLOCK_DIVIDER_512); // 250MHz / 512 = ~500kHz
 	bcm2835_spi_chipSelect(BCM2835_SPI_CS0);
 	bcm2835_spi_setChipSelectPolarity(BCM2835_SPI_CS0, LOW);
 }
 
 /* Creates a multi_thresh_indeces variable containing the array
  * indeces representing relevant band frequcneis to be used in multithresholding
- * \param[in] n the window length to setup for
- * \param[in] doppler whether doppler's effect will be accounted for
+ * \param[in] n The window length to setup for
+ * \param[in] doppler Whether doppler's effect will be accounted for
 */
 multi_thresh_indeces SetupMultiThresholding(const int &n, const bool &doppler)
 {
@@ -110,21 +122,22 @@ multi_thresh_indeces SetupMultiThresholding(const int &n, const bool &doppler)
 
 /* Performs an entire sample window, saving the results in the
  * parameter array of integers. 
- * \param[in] *samples The array that will hold all samples for this window
+ * \param[in] *samples[N_CH] The array that will hold all samples for this window
  * \return The time taken to complete the sampling window
 */
-double DoSampling(double *samples)
+double DoSampling(double *samples[N_CH])
 {
-	char mosi[2] = {0x68,0x00}; // 01101000, x -> 0,1,single=1,cs,msbf
-	char miso[2] = { 0 };
-	int i = 0;
+	static char mosi[4][3] = {{0x01,CHANNELS[0],0x00},{0x01,CHANNELS[1],0x00},{0x01,CHANNELS[2],0x00},{0x01,CHANNELS[3],0x00}};
+	char miso[3] = { 0 };
+
 	if (mlockall(MCL_CURRENT | MCL_FUTURE) == 0) {   // Prevent paging
 		auto begin = std::chrono::high_resolution_clock::now();
-		while (i < N) {
-			bcm2835_spi_transfernb(mosi, miso, 2); // send/receive 2 bytes
-			samples[i] = (miso[0] << 8) + miso[1];
+		for(int i = 0; i < N; i++) {
+			for (int j = 0; j < N_CH; j++) {
+				bcm2835_spi_transfernb(mosi[j], miso, 3); // send/receive 3 bytes
+				samples[j][i] = (miso[1] << 8) + miso[2];
+			}
 			bcm2835_delayMicroseconds(SAMPLE_DELAY);
-			i++;
 		}	
 		auto end = std::chrono::high_resolution_clock::now();
 		munlockall();
@@ -170,7 +183,6 @@ fft_analysis DoFFT(fft_vars vars, const double *samples, const multi_thresh_inde
 		vars.window[j] = samples[n*i+j];
 	}
 
-		
 	fftw_execute(vars.p[split]); // Repeatable. Run the plan parent/sub plan depending on split param
 
 	// Obtain absolute, normalised FFT
@@ -178,6 +190,8 @@ fft_analysis DoFFT(fft_vars vars, const double *samples, const multi_thresh_inde
 	for (int j = 1; j < (n/ 2 - 1); j++) {
 		vars.absFFT[j] = 2 * sqrt(pow(vars.out[j][0], 2) + pow(vars.out[j][1], 2)) / n;
 	}
+	// TESTING ONLY
+	//FftPrint("mcp3008test.txt", vars.absFFT, (double)fs / (double)n);
 
 	// Obtain noise levels
 	double totalNoise = 0;
@@ -222,7 +236,7 @@ int Detect(const fft_analysis &fftAnal, int (&detectedBands)[BANDS]) {
 		detections += detectedBands[i];
 	}
 
-	printf("The siren is present in %d out of %d bands, and they are:", detections, BANDS);
+	//printf("The siren is present in %d out of %d bands, and they are:", detections, BANDS);
 
 	for (int j = 0; j < BANDS; j++)	{
 		printf(" %d ", detectedBands[j]);
@@ -273,52 +287,59 @@ int main()
 	
 	double timeSpan; // Actual sampling time
 	bool firstRunFlag = true; // Prevent 'empty' array from being used
-	double *in[N_CH][2]; // Store two sampling windows at a time
+	double *in[2][N_CH]; // Store two sampling windows at a time for each channel
 	double *inRev[N_CH];
-	in[0] = (double*)malloc(sizeof(double) * N);
-	in[1] = (double*)malloc(sizeof(double) * N);
-	inRev = (double*)malloc(sizeof(double) * N);
-	fft_analysis fftAnal[2], fftAnalRev;
-	int detectedBands[2][BANDS];
-	int detections, detectionsRev;
+	for (int ch = 0; ch < N_CH; ch++) {
+		in[0][ch] = (double*)malloc(sizeof(double) * N);
+		in[1][ch] = (double*)malloc(sizeof(double) * N);
+		inRev[ch] = (double*)malloc(sizeof(double) * N);
+	}
+	fft_analysis fftAnal[2][N_CH], fftAnalRev[N_CH];
+	int detectedBands[N_CH][2][BANDS];
+	int detections[N_CH], detectionsRev[N_CH];
 	
 	while (1) {
 		
 		for (int i = 0; i < 2; i++) {
 			timeSpan = DoSampling(in[i]);
 			printf("The sampling window of %d samples was %f seconds \n", N, timeSpan);
-			
-			fftAnal[i] = DoFFT(fftV, in[i], mtIndeces, false, 0);
-			detections = Detect(fftAnal[i], detectedBands[i]);
-			
-			// Re-evaluate siren presence by merging consecutive windows when 1 or 2 bands 
-			// are detected
-			if (((detections > 0) && (detections <= (BANDS / 2))) && (!firstRunFlag)) {
-				for (int j = N/2; j < N; j++) {
-					inRev[j-(N/2)] = in[!i][j];
+			for (int ch = 0; ch < N_CH; ch++) {
+				printf("Channel %d: ", ch); 
+				
+				fftAnal[i][ch] = DoFFT(fftV, in[i][ch], mtIndeces, false, 0);
+				detections[ch] = Detect(fftAnal[i][ch], detectedBands[ch][i]);
+				
+				// Re-evaluate siren presence by merging consecutive windows when 1 or 2 bands 
+				// are detected
+				if (((detections[ch] > 0) && (detections[ch] <= (BANDS / 2))) && (!firstRunFlag)) {
+					for (int j = N/2; j < N; j++) {
+						inRev[ch][j-(N/2)] = in[!i][ch][j];
+					}
+					for (int j = 0; j < N/2; j++) {
+						inRev[ch][j+(N/2)] = in[!i][ch][j];
+					}
+					fftAnalRev[ch] = DoFFT(fftV, inRev[ch], mtIndeces, false, 0);
+					detectionsRev[ch] = Detect(fftAnalRev[ch], detectedBands[ch][i]);
+					if (detectionsRev[ch] > detections[ch]) {
+						detections[ch] = detectionsRev[ch];
+					}
 				}
-				for (int j = 0; j < N/2; j++) {
-					inRev[j+(N/2)] = in[!i][j];
+				
+				printf("Siren was detected in %d out of %d bands \n", detections[ch], BANDS);
+				
+				// Direction
+				if (detections[ch] >= ((BANDS / 2) + 1)) {
+					DirectionParentOnly(fftAnal[i][ch], fftAnal[!i][ch], detectedBands[ch]);
 				}
-				fftAnalRev = DoFFT(fftV, inRev, mtIndeces, false, 0);
-				detectionsRev = Detect(fftAnalRev, detectedBands[i]);
-				if (detectionsRev > detections) {
-					detections = detectionsRev;
-				}
+				printf("\n");
+				firstRunFlag = false; 
 			}
-			
-			printf("Siren was detected in %d out of %d bands \n", detections, BANDS);
-			
-			// Detection
-			if (detections >= ((BANDS / 2) + 1)) {
-				DirectionParentOnly(fftAnal[i], fftAnal[!i], detectedBands);
-			}
-			
-			firstRunFlag = false; 
 		}
 	}
 	
-	free(in[0]); free(in[1]); free(inRev);
+	for (int i = 0; i < N_CH; i++) {
+		free(in[0][i]); free(in[1][i]); free(inRev[i]);
+	}
 	fftw_destroy_plan(fftV.p[0]);
 	fftw_destroy_plan(fftV.p[1]);
 	fftw_free(fftV.out);
