@@ -31,13 +31,14 @@ const int N = 16464;   // # of samples
 const int N_CH = 2;   // # of Mics
 const char CHANNELS[4] = {0x80,0x90,0xa0,0xb0};   // Code to send to ADC
 // Testing-tuned microsecond delay to achieve 8kHz sampling
-const int SAMPLE_DELAY = 87; //90;
+const int SAMPLE_DELAY = 55; //21;  //87;  //90; //
 // FFT-variables
 const int SPLIT = 4; // Amount of subwindows per parent window
 const bool DOPPLER_PARENT = true;
 const bool DOPPLER_SUB = false;
-// Direction variables
+// Direction, location variables
 const double DIR_MARGIN = 0.02;
+const char* MIC_LOC[4] = {"behind", "left", "ahead", "right"};
 
 struct multi_thresh_indeces {
 	int bandIndeces[BANDS + 1];
@@ -58,6 +59,11 @@ struct fft_vars {
 struct fft_analysis {
 	double bandAvgs[BANDS];
 	double noiseThresh;
+};
+
+enum location {
+	behind,
+	left
 };
 
 void FftPrint(const char* fileName, double *data, const double df)
@@ -84,7 +90,7 @@ void SpiSetup()
 	bcm2835_spi_begin();
 	bcm2835_spi_setBitOrder(BCM2835_SPI_BIT_ORDER_MSBFIRST);
 	bcm2835_spi_setDataMode(BCM2835_SPI_MODE0); // Data comes in on falling edge
-	bcm2835_spi_setClockDivider(BCM2835_SPI_CLOCK_DIVIDER_512); // 250MHz / 512 = ~500kHz
+	bcm2835_spi_setClockDivider(BCM2835_SPI_CLOCK_DIVIDER_512); // 250MHz / 256 = ~1000kHz
 	bcm2835_spi_chipSelect(BCM2835_SPI_CS0);
 	bcm2835_spi_setChipSelectPolarity(BCM2835_SPI_CS0, LOW);
 }
@@ -190,8 +196,6 @@ fft_analysis DoFFT(fft_vars vars, const double *samples, const multi_thresh_inde
 	for (int j = 1; j < (n/ 2 - 1); j++) {
 		vars.absFFT[j] = 2 * sqrt(pow(vars.out[j][0], 2) + pow(vars.out[j][1], 2)) / n;
 	}
-	// TESTING ONLY
-	//FftPrint("mcp3008test.txt", vars.absFFT, (double)fs / (double)n);
 
 	// Obtain noise levels
 	double totalNoise = 0;
@@ -251,13 +255,13 @@ int Detect(const fft_analysis &fftAnal, int (&detectedBands)[BANDS]) {
  * \param[in] fftAnalCur The FFT-analysis for the second window
  * \param[in] detectedBands[2][BANDS] The two detection results
  */
-void DirectionParentOnly(const fft_analysis fftAnalPrev, fft_analysis fftAnalCur, const int (&detectedBands)[2][BANDS]) {
+void DirectionParentOnly(const fft_analysis &fftAnalPrev, fft_analysis &fftAnalCur, const int (&detectedBands)[2][BANDS]) {
 	double windowAvgs[2] = { 0 };
 	fft_analysis fftAnals[2] = {fftAnalPrev, fftAnalCur};
 
 	for (int i = 0; i < 2; i++) {
 		for (int j = 0; j < BANDS; j++) {
-			windowAvgs[i] += (fftAnals[i].bandAvgs[j] * detectedBands[i][j]);
+			windowAvgs[i] += (fftAnals[i].bandAvgs[j]); // * detectedBands[i][j]);
 		}
 		windowAvgs[i] = windowAvgs[i] / BANDS;
 	}
@@ -276,6 +280,27 @@ void DirectionParentOnly(const fft_analysis fftAnalPrev, fft_analysis fftAnalCur
 	}
 }
 
+void Location(const fft_analysis (&fftAnals)[N_CH], const int (&detectedBands)[N_CH][2][BANDS], const int &i) 
+{
+	double windowAvgs[N_CH] = { 0 };
+	printf("moo \n");
+	for (int ch = 0; ch < N_CH; ch++) {
+		for (int j = 0; j < BANDS; j++) {
+			windowAvgs[ch] += (fftAnals[ch].bandAvgs[j] * detectedBands[ch][i][j]);
+		}
+		windowAvgs[ch] = windowAvgs[ch] / BANDS;
+	}
+	int loc = 0;
+	
+	for (int ch = 1; ch < N_CH; ch++) {
+		double rel = windowAvgs[ch] / windowAvgs[ch - 1];
+		if (rel > (1 + 0)) {
+			loc = ch;
+		} 
+	}
+	printf("The EV was detected %s of you \n", MIC_LOC[loc]);
+}
+
 int main() 
 {
 	SpiSetup();
@@ -287,6 +312,7 @@ int main()
 	
 	double timeSpan; // Actual sampling time
 	bool firstRunFlag = true; // Prevent 'empty' array from being used
+	bool evPresent = false;
 	double *in[2][N_CH]; // Store two sampling windows at a time for each channel
 	double *inRev[N_CH];
 	for (int ch = 0; ch < N_CH; ch++) {
@@ -302,12 +328,18 @@ int main()
 		
 		for (int i = 0; i < 2; i++) {
 			timeSpan = DoSampling(in[i]);
+			
+			auto begin = std::chrono::high_resolution_clock::now();
+			
 			printf("The sampling window of %d samples was %f seconds \n", N, timeSpan);
 			for (int ch = 0; ch < N_CH; ch++) {
 				printf("Channel %d: ", ch); 
 				
 				fftAnal[i][ch] = DoFFT(fftV, in[i][ch], mtIndeces, false, 0);
 				detections[ch] = Detect(fftAnal[i][ch], detectedBands[ch][i]);
+				
+				// TESTING ONLY
+				//FftPrint("mcp3008test.txt", fftV.absFFT, (double)fs / (double)n);
 				
 				// Re-evaluate siren presence by merging consecutive windows when 1 or 2 bands 
 				// are detected
@@ -330,10 +362,20 @@ int main()
 				// Direction
 				if (detections[ch] >= ((BANDS / 2) + 1)) {
 					DirectionParentOnly(fftAnal[i][ch], fftAnal[!i][ch], detectedBands[ch]);
+					evPresent = true;
 				}
-				printf("\n");
 				firstRunFlag = false; 
 			}
+			
+			// Location
+			if (evPresent) {
+				Location(fftAnal[i], detectedBands, i);
+				evPresent = false;
+			}
+			
+			auto end = std::chrono::high_resolution_clock::now();
+			double tim = std::chrono::duration_cast<std::chrono::milliseconds>(end-begin).count();
+			printf("Algorithms took %fms \n \n", tim);
 		}
 	}
 	
