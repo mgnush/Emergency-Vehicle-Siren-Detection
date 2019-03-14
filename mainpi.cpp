@@ -8,6 +8,7 @@
 #include <chrono>
 #include <iostream>
 #include <fstream>
+#include <string>
 //#include "display.h"
 
 // Extreme doppler effect coefficients
@@ -28,10 +29,10 @@ const double NOISE_COEFF[BANDS] = {2.6,2.5,2.8,2.9,2.9,2.8};   //{2.6,2.5,2.6,2.
 const double st = 2.058;   // Sampling time
 const double fs = 8000;   // 8kHz sampling
 const int N = 16464;   // # of samples
-const int N_CH = 2;   // # of Mics
+const int N_CH = 3;   // # of Mics
 const char CHANNELS[4] = {0x80,0x90,0xa0,0xb0};   // Code to send to ADC
 // Testing-tuned microsecond delay to achieve 8kHz sampling
-const int SAMPLE_DELAY = 55; //21;  //87;  //90; //
+const int SAMPLE_DELAY = 21; //55; //21;  //87;  //90; //
 // FFT-variables
 const int SPLIT = 4; // Amount of subwindows per parent window
 const bool DOPPLER_PARENT = true;
@@ -126,8 +127,8 @@ multi_thresh_indeces SetupMultiThresholding(const int &n, const bool &doppler)
 	return mtIndeces;
 }
 
-/* Performs an entire sample window, saving the results in the
- * parameter array of integers. 
+/* Performs an entire sample window (all channels), saving the results in the
+ * parameter array. 
  * \param[in] *samples[N_CH] The array that will hold all samples for this window
  * \return The time taken to complete the sampling window
 */
@@ -135,7 +136,13 @@ double DoSampling(double *samples[N_CH])
 {
 	static char mosi[4][3] = {{0x01,CHANNELS[0],0x00},{0x01,CHANNELS[1],0x00},{0x01,CHANNELS[2],0x00},{0x01,CHANNELS[3],0x00}};
 	char miso[3] = { 0 };
-
+	
+	// Set process as highest priority in the OS scheduler
+	struct sched_param sp;
+	//memset(&sp, 0, sizeof(sp));
+	sp.sched_priority = sched_get_priority_max(SCHED_FIFO);
+	sched_setscheduler(0, SCHED_FIFO, &sp);
+	
 	if (mlockall(MCL_CURRENT | MCL_FUTURE) == 0) {   // Prevent paging
 		auto begin = std::chrono::high_resolution_clock::now();
 		for(int i = 0; i < N; i++) {
@@ -214,13 +221,13 @@ fft_analysis DoFFT(fft_vars vars, const double *samples, const multi_thresh_inde
 		for (int k = mtIndeces.bandIndeces[j]; k < mtIndeces.bandIndeces[j + 1]; k++) {
 			totalVol[j] += vars.absFFT[k];
 		}
-		fftAnal.bandAvgs[j] = totalVol[j] / mtIndeces.bandLength;
+		fftAnal.bandAvgs[j] = totalVol[j] / mtIndeces.bandLength / fftAnal.noiseThresh;
 	}
 
 	// Print for testing
 	printf("Window %d: The noise threshold is %f, and the band averages are", i, fftAnal.noiseThresh);
 	for (int j = 0; j < BANDS; j++) {
-		printf(" %f ", fftAnal.bandAvgs[j]/fftAnal.noiseThresh);
+		printf(" %.2f ", fftAnal.bandAvgs[j]);
 	}
 	printf("\n");
 
@@ -236,7 +243,7 @@ int Detect(const fft_analysis &fftAnal, int (&detectedBands)[BANDS]) {
 	int detections = 0;
 
 	for (int i = 0; i < BANDS; i++) {
-		detectedBands[i] = (fftAnal.bandAvgs[i] >= (fftAnal.noiseThresh * NOISE_COEFF[i]));
+		detectedBands[i] = (fftAnal.bandAvgs[i] >= NOISE_COEFF[i]);
 		detections += detectedBands[i];
 	}
 
@@ -283,7 +290,7 @@ void DirectionParentOnly(const fft_analysis &fftAnalPrev, fft_analysis &fftAnalC
 void Location(const fft_analysis (&fftAnals)[N_CH], const int (&detectedBands)[N_CH][2][BANDS], const int &i) 
 {
 	double windowAvgs[N_CH] = { 0 };
-	printf("moo \n");
+	//printf("moo \n");
 	for (int ch = 0; ch < N_CH; ch++) {
 		for (int j = 0; j < BANDS; j++) {
 			windowAvgs[ch] += (fftAnals[ch].bandAvgs[j] * detectedBands[ch][i][j]);
@@ -323,6 +330,7 @@ int main()
 	fft_analysis fftAnal[2][N_CH], fftAnalRev[N_CH];
 	int detectedBands[N_CH][2][BANDS];
 	int detections[N_CH], detectionsRev[N_CH];
+	//std::string exit;
 	
 	while (1) {
 		
@@ -341,7 +349,7 @@ int main()
 				// TESTING ONLY
 				//FftPrint("mcp3008test.txt", fftV.absFFT, (double)fs / (double)n);
 				
-				// Re-evaluate siren presence by merging consecutive windows when 1 or 2 bands 
+				// Re-evaluate siren presence by merging consecutive half-windows when 1 or more bands 
 				// are detected
 				if (((detections[ch] > 0) && (detections[ch] <= (BANDS / 2))) && (!firstRunFlag)) {
 					for (int j = N/2; j < N; j++) {
@@ -354,6 +362,7 @@ int main()
 					detectionsRev[ch] = Detect(fftAnalRev[ch], detectedBands[ch][i]);
 					if (detectionsRev[ch] > detections[ch]) {
 						detections[ch] = detectionsRev[ch];
+						fftAnal[i][ch] = fftAnalRev[ch]; // Test
 					}
 				}
 				
@@ -370,6 +379,7 @@ int main()
 			// Location
 			if (evPresent) {
 				Location(fftAnal[i], detectedBands, i);
+				
 				evPresent = false;
 			}
 			
