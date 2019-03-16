@@ -9,7 +9,7 @@
 #include <iostream>
 #include <fstream>
 #include <string>
-//#include "display.h"
+#include "display.h"
 
 // Extreme doppler effect coefficients
 const double DOPPLER_MIN = 0.8491;
@@ -37,9 +37,8 @@ const int SAMPLE_DELAY = 21; //55; //21;  //87;  //90; //
 const int SPLIT = 4; // Amount of subwindows per parent window
 const bool DOPPLER_PARENT = true;
 const bool DOPPLER_SUB = false;
-// Direction, location variables
+// Direction, location constants
 const double DIR_MARGIN = 0.02;
-const char* MIC_LOC[4] = {"behind", "left", "ahead", "right"};
 
 struct multi_thresh_indeces {
 	int bandIndeces[BANDS + 1];
@@ -60,11 +59,6 @@ struct fft_vars {
 struct fft_analysis {
 	double bandAvgs[BANDS];
 	double noiseThresh;
-};
-
-enum location {
-	behind,
-	left
 };
 
 void FftPrint(const char* fileName, double *data, const double df)
@@ -262,7 +256,7 @@ int Detect(const fft_analysis &fftAnal, int (&detectedBands)[BANDS]) {
  * \param[in] fftAnalCur The FFT-analysis for the second window
  * \param[in] detectedBands[2][BANDS] The two detection results
  */
-void DirectionParentOnly(const fft_analysis &fftAnalPrev, fft_analysis &fftAnalCur, const int (&detectedBands)[2][BANDS]) {
+direction DirectionParentOnly(const fft_analysis &fftAnalPrev, fft_analysis &fftAnalCur, const int (&detectedBands)[2][BANDS]) {
 	double windowAvgs[2] = { 0 };
 	fft_analysis fftAnals[2] = {fftAnalPrev, fftAnalCur};
 
@@ -277,40 +271,45 @@ void DirectionParentOnly(const fft_analysis &fftAnalPrev, fft_analysis &fftAnalC
 		double rel = windowAvgs[i] / windowAvgs[i - 1];
 		if (rel > (1 + DIR_MARGIN)) {
 			printf("Detected EV is approaching at %f. \n", rel);
+			return approaching;
 		}
 		else if (rel < (1 - DIR_MARGIN)) {
 			printf("Detected EV is moving away at %f. \n", rel);
+			return receding;
 		}
 		else {
 			printf("Detected direction is inconclusive at %f. \n", rel);
+			return no_dir;
 		}
 	}
 }
 
-void Location(const fft_analysis (&fftAnals)[N_CH], const int (&detectedBands)[N_CH][2][BANDS], const int &i) 
+location Location(const fft_analysis (&fftAnals)[N_CH], const int (&detectedBands)[N_CH][2][BANDS], const int &i) 
 {
 	double windowAvgs[N_CH] = { 0 };
-	//printf("moo \n");
 	for (int ch = 0; ch < N_CH; ch++) {
 		for (int j = 0; j < BANDS; j++) {
 			windowAvgs[ch] += (fftAnals[ch].bandAvgs[j] * detectedBands[ch][i][j]);
 		}
 		windowAvgs[ch] = windowAvgs[ch] / BANDS;
 	}
-	int loc = 0;
 	
+	location loc = (location)0;
 	for (int ch = 1; ch < N_CH; ch++) {
 		double rel = windowAvgs[ch] / windowAvgs[ch - 1];
 		if (rel > (1 + 0)) {
-			loc = ch;
+			loc = (location)ch;
 		} 
 	}
-	printf("The EV was detected %s of you \n", MIC_LOC[loc]);
+	printf("The EV was detected in direction %d. \n", loc);
+	
+	return loc;
 }
 
 int main() 
 {
 	SpiSetup();
+	initialize_display_pins();
 	
 	multi_thresh_indeces mtIndeces = SetupMultiThresholding(N, DOPPLER_PARENT);
 	multi_thresh_indeces mtIndecesSub = SetupMultiThresholding(N/SPLIT, DOPPLER_SUB);
@@ -330,6 +329,9 @@ int main()
 	fft_analysis fftAnal[2][N_CH], fftAnalRev[N_CH];
 	int detectedBands[N_CH][2][BANDS];
 	int detections[N_CH], detectionsRev[N_CH];
+	location loc;
+	direction dir[N_CH];
+	int cycles = 0; // # of sampling windows since last detection
 	//std::string exit;
 	
 	while (1) {
@@ -349,8 +351,8 @@ int main()
 				// TESTING ONLY
 				//FftPrint("mcp3008test.txt", fftV.absFFT, (double)fs / (double)n);
 				
-				// Re-evaluate siren presence by merging consecutive half-windows when 1 or more bands 
-				// are detected
+				// Re-evaluate siren presence by merging consecutive half-windows when inconclusive
+				// number of bands are detected
 				if (((detections[ch] > 0) && (detections[ch] <= (BANDS / 2))) && (!firstRunFlag)) {
 					for (int j = N/2; j < N; j++) {
 						inRev[ch][j-(N/2)] = in[!i][ch][j];
@@ -370,25 +372,30 @@ int main()
 				
 				// Direction
 				if (detections[ch] >= ((BANDS / 2) + 1)) {
-					DirectionParentOnly(fftAnal[i][ch], fftAnal[!i][ch], detectedBands[ch]);
+					dir[ch] = DirectionParentOnly(fftAnal[i][ch], fftAnal[!i][ch], detectedBands[ch]);
 					evPresent = true;
 				}
 				firstRunFlag = false; 
 			}
 			
-			// Location
+			// Location & UI
 			if (evPresent) {
-				Location(fftAnal[i], detectedBands, i);
-				
+				loc = Location(fftAnal[i], detectedBands, i);
+				cycles = 0;
 				evPresent = false;
-			}
+			} else {
+				cycles++;
+			}			
+			
+			update_display(cycles, loc, dir[loc]);
 			
 			auto end = std::chrono::high_resolution_clock::now();
 			double tim = std::chrono::duration_cast<std::chrono::milliseconds>(end-begin).count();
-			printf("Algorithms took %fms \n \n", tim);
+			printf("Algorithms took %.1fms \n \n", tim);
 		}
 	}
 	
+	// Free resources
 	for (int i = 0; i < N_CH; i++) {
 		free(in[0][i]); free(in[1][i]); free(inRev[i]);
 	}
