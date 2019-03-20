@@ -7,8 +7,10 @@
 #include <sys/mman.h>
 #include <chrono>
 #include <iostream>
+#include <algorithm>
 #include <fstream>
 #include <string>
+#include <list>
 #include "display.h"
 
 // Extreme doppler effect coefficients
@@ -30,13 +32,13 @@ const double st = 2.058;   // Sampling time
 const double fs = 8000;   // 8kHz sampling
 const int N = 16464;   // # of samples
 const int N_CH = 3;   // # of Mics
-const char CHANNELS[4] = {0x80,0x90,0xa0,0xb0};   // Code to send to ADC
+const char CHANNELS[4] = {0x80,0x90,0xb0,0xb0};   // Code to send to ADC
+const int S = 2;   // # of windows to store (per channel)
+const int S_FFT = 4;	// # of consecutive fft-analysis to store
 // Testing-tuned microsecond delay to achieve 8kHz sampling
 const int SAMPLE_DELAY = 21; //55; //21;  //87;  //90; //
 // FFT-variables
-const int SPLIT = 4; // Amount of subwindows per parent window
-const bool DOPPLER_PARENT = true;
-const bool DOPPLER_SUB = false;
+const bool DOPPLER = true;
 // Direction, location constants
 const double DIR_MARGIN = 0.02;
 
@@ -52,7 +54,7 @@ struct multi_thresh_indeces {
 struct fft_vars {
 	double *window;
 	fftw_complex *out;   
-	fftw_plan p[2];
+	fftw_plan p;
 	double *absFFT;
 };
 
@@ -159,8 +161,7 @@ fft_vars SetupFFT() {
 	
 	vars.window = (double*)malloc(sizeof(double) * 2 * (N / 2 - 1));
 	vars.out = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * 2 * (N / 2 - 1));   // In-place fft requires in and out to accomodate two out-arrays   // Complex 1D, n/2-1 length output
-	vars.p[0] = fftw_plan_dft_r2c_1d(N, vars.window, vars.out, FFTW_ESTIMATE); // MEASURE consumes extra time on initial plan execution. ESTIMATE has no initial timecost.
-	vars.p[1] = fftw_plan_dft_r2c_1d(N/SPLIT, vars.window, vars.out, FFTW_ESTIMATE); // This plan is for analysing subwindows. 
+	vars.p = fftw_plan_dft_r2c_1d(N, vars.window, vars.out, FFTW_ESTIMATE); // MEASURE consumes extra time on initial plan execution. ESTIMATE has no initial timecost.
 	vars.absFFT = (double*)malloc(sizeof(double) * (N / 2 - 1));	
 
 	return vars;
@@ -175,14 +176,10 @@ fft_vars SetupFFT() {
  * \param[in] i The subwindow to FFT - 0 if parent window
  * \return The FFT-analysis in the form of multithresholding average band values
 */
-fft_analysis DoFFT(fft_vars vars, const double *samples, const multi_thresh_indeces &mtIndeces, const bool &split, const int &i)
+fft_analysis DoFFT(fft_vars &vars, const double *samples, const multi_thresh_indeces &mtIndeces, const bool &split, const int &i)
 {
 	fft_analysis fftAnal;
 	int n = N;
-	
-	if (split) {
-		n /= SPLIT;
-	}
 	
 	// Fill plan input array
 
@@ -190,7 +187,7 @@ fft_analysis DoFFT(fft_vars vars, const double *samples, const multi_thresh_inde
 		vars.window[j] = samples[n*i+j];
 	}
 
-	fftw_execute(vars.p[split]); // Repeatable. Run the plan parent/sub plan depending on split param
+	fftw_execute(vars.p); // Repeatable
 
 	// Obtain absolute, normalised FFT
 	vars.absFFT[0] = vars.out[0][0] / n;
@@ -233,7 +230,8 @@ fft_analysis DoFFT(fft_vars vars, const double *samples, const multi_thresh_inde
  * \param[in] detectedBands[BANDS] The array to hold the detection results
  * \return The number of bands that detected an EV.
  */
-int Detect(const fft_analysis &fftAnal, int (&detectedBands)[BANDS]) {
+int Detect(const fft_analysis &fftAnal, int (&detectedBands)[BANDS]) 
+{
 	int detections = 0;
 
 	for (int i = 0; i < BANDS; i++) {
@@ -251,36 +249,69 @@ int Detect(const fft_analysis &fftAnal, int (&detectedBands)[BANDS]) {
 	return detections;
 }
 
-/* Runs the direction analysis, comparing two consecutive parent windows
+// Re-evaluate siren presence by merging consecutive half-windows when inconclusive
+// number of bands are detected
+void SplitWindowDetection(multi_thresh_indeces mtIndeces, int &detections, double *in[S][N_CH], double *inRev, fft_analysis &fftAnal, fft_vars &fftV, int &s, int &ch) 
+{
+	int detectionsRev = 0;
+	int detectedBandsRev[BANDS];
+	fft_analysis fftAnalRev;
+	
+	// Create new window consisting of latter half of previous window 
+	// and first half of current window
+	for (int j = N/2; j < N; j++) {
+		inRev[j-(N/2)] = in[!s][ch][j];
+	}
+	for (int j = 0; j < N/2; j++) {
+		inRev[j+(N/2)] = in[!s][ch][j];
+	}
+	
+	// Analyse new window and replace results if better detection
+	fftAnalRev = DoFFT(fftV, inRev, mtIndeces, false, 0);
+	detectionsRev = Detect(fftAnalRev, detectedBandsRev);
+	if (detectionsRev > detections) {
+		detections = detectionsRev;
+		fftAnal = fftAnalRev; 
+	}
+}
+
+/* Runs the direction analysis, comparing two consecutive windows
  * \param[in] fftAnalPrev The FFT-analysis for the first window
  * \param[in] fftAnalCur The FFT-analysis for the second window
  * \param[in] detectedBands[2][BANDS] The two detection results
  */
-direction DirectionParentOnly(const fft_analysis &fftAnalPrev, fft_analysis &fftAnalCur, const int (&detectedBands)[2][BANDS]) {
-	double windowAvgs[2] = { 0 };
-	fft_analysis fftAnals[2] = {fftAnalPrev, fftAnalCur};
+direction Direction(const fft_analysis (&fftAnalPrev)[N_CH], fft_analysis (&fftAnalCur)[N_CH]) 
+{
+	double rel[N_CH];
+	double relAvg = 0;
+	
+	for (int ch = 0; ch < N_CH; ch++) {
+		double windowAvgs[2] = { 0 };
 
-	for (int i = 0; i < 2; i++) {
 		for (int j = 0; j < BANDS; j++) {
-			windowAvgs[i] += (fftAnals[i].bandAvgs[j]); // * detectedBands[i][j]);
+			windowAvgs[0] += (fftAnalPrev[ch].bandAvgs[j]);
+			windowAvgs[1] += (fftAnalCur[ch].bandAvgs[j]); 
 		}
-		windowAvgs[i] = windowAvgs[i] / BANDS;
-	}
+		windowAvgs[0] = windowAvgs[0] / BANDS;
+		windowAvgs[1] = windowAvgs[1] / BANDS;
 
-	for (int i = 1; i < 2; i++) {
-		double rel = windowAvgs[i] / windowAvgs[i - 1];
-		if (rel > (1 + DIR_MARGIN)) {
-			printf("Detected EV is approaching at %f. \n", rel);
-			return approaching;
-		}
-		else if (rel < (1 - DIR_MARGIN)) {
-			printf("Detected EV is moving away at %f. \n", rel);
-			return receding;
-		}
-		else {
-			printf("Detected direction is inconclusive at %f. \n", rel);
-			return no_dir;
-		}
+		rel[ch] = windowAvgs[1] / windowAvgs[0];
+		relAvg += rel[ch];
+	}
+	
+	relAvg = relAvg /= N_CH;
+	
+	if (relAvg > (1 + DIR_MARGIN)) {
+		printf("Detected EV is approaching at %f. \n", relAvg);
+		return approaching;
+	}
+	else if (relAvg < (1 - DIR_MARGIN)) {
+		printf("Detected EV is moving away at %f. \n", relAvg);
+		return receding;
+	}
+	else {
+		printf("Detected direction is inconclusive at %f. \n", relAvg);
+		return no_dir;
 	}
 }
 
@@ -311,83 +342,71 @@ int main()
 	SpiSetup();
 	initialize_display_pins();
 	
-	multi_thresh_indeces mtIndeces = SetupMultiThresholding(N, DOPPLER_PARENT);
-	multi_thresh_indeces mtIndecesSub = SetupMultiThresholding(N/SPLIT, DOPPLER_SUB);
+	multi_thresh_indeces mtIndeces = SetupMultiThresholding(N, DOPPLER);
 
 	fft_vars fftV = SetupFFT();
 	
 	double timeSpan; // Actual sampling time
 	bool firstRunFlag = true; // Prevent 'empty' array from being used
 	bool evPresent = false;
-	double *in[2][N_CH]; // Store two sampling windows at a time for each channel
-	double *inRev[N_CH];
-	for (int ch = 0; ch < N_CH; ch++) {
-		in[0][ch] = (double*)malloc(sizeof(double) * N);
-		in[1][ch] = (double*)malloc(sizeof(double) * N);
-		inRev[ch] = (double*)malloc(sizeof(double) * N);
+	double *in[S][N_CH]; // Store S consecutive sampling windows at a time for each channel
+	double *inRev;
+	for (int s = 0; s < S; s++) {
+		for (int ch = 0; ch < N_CH; ch++) {
+			in[s][ch] = (double*)malloc(sizeof(double) * N);
+			in[s][ch] = (double*)malloc(sizeof(double) * N);
+		}
 	}
-	fft_analysis fftAnal[2][N_CH], fftAnalRev[N_CH];
-	int detectedBands[N_CH][2][BANDS];
-	int detections[N_CH], detectionsRev[N_CH];
+	inRev = (double*)malloc(sizeof(double) * N);
+	//std::list<fft_analysis[N_CH]> fftAnals;
+	fft_analysis fftAnal[S][N_CH];
+	int detectedBands[N_CH][S][BANDS];
+	int detections[N_CH];
 	location loc;
-	direction dir[N_CH];
+	direction dir;
 	int cycles = 0; // # of sampling windows since last detection
 	//std::string exit;
 	
 	while (1) {
 		
-		for (int i = 0; i < 2; i++) {
-			timeSpan = DoSampling(in[i]);
-			
-			auto begin = std::chrono::high_resolution_clock::now();
-			
+		for (int s = 0; s < S; s++) {
+			timeSpan = DoSampling(in[s]);		
 			printf("The sampling window of %d samples was %f seconds \n", N, timeSpan);
+			
+			auto begin = std::chrono::high_resolution_clock::now();   // Testing only
+			
+			// Detection on each channel
 			for (int ch = 0; ch < N_CH; ch++) {
 				printf("Channel %d: ", ch); 
 				
-				fftAnal[i][ch] = DoFFT(fftV, in[i][ch], mtIndeces, false, 0);
-				detections[ch] = Detect(fftAnal[i][ch], detectedBands[ch][i]);
+				fftAnal[s][ch] = DoFFT(fftV, in[s][ch], mtIndeces, false, 0);
+				detections[ch] = Detect(fftAnal[s][ch], detectedBands[ch][s]);
 				
 				// TESTING ONLY
 				//FftPrint("mcp3008test.txt", fftV.absFFT, (double)fs / (double)n);
 				
-				// Re-evaluate siren presence by merging consecutive half-windows when inconclusive
-				// number of bands are detected
-				if (((detections[ch] > 0) && (detections[ch] <= (BANDS / 2))) && (!firstRunFlag)) {
-					for (int j = N/2; j < N; j++) {
-						inRev[ch][j-(N/2)] = in[!i][ch][j];
-					}
-					for (int j = 0; j < N/2; j++) {
-						inRev[ch][j+(N/2)] = in[!i][ch][j];
-					}
-					fftAnalRev[ch] = DoFFT(fftV, inRev[ch], mtIndeces, false, 0);
-					detectionsRev[ch] = Detect(fftAnalRev[ch], detectedBands[ch][i]);
-					if (detectionsRev[ch] > detections[ch]) {
-						detections[ch] = detectionsRev[ch];
-						fftAnal[i][ch] = fftAnalRev[ch]; // Test
-					}
-				}
+				if (((detections[ch] > 0) && (detections[ch] <= (BANDS / 2))) && (!firstRunFlag)) { 
+					SplitWindowDetection(mtIndeces, detections[ch], in, inRev, fftAnal[s][ch], fftV, s, ch); 
+				} 
 				
 				printf("Siren was detected in %d out of %d bands \n", detections[ch], BANDS);
 				
-				// Direction
-				if (detections[ch] >= ((BANDS / 2) + 1)) {
-					dir[ch] = DirectionParentOnly(fftAnal[i][ch], fftAnal[!i][ch], detectedBands[ch]);
-					evPresent = true;
-				}
+				evPresent = (detections[ch] > (BANDS / 2) );   // Detection verdict - only one channel needs to detect
+
 				firstRunFlag = false; 
 			}
 			
-			// Location & UI
+			// Direction, Location, UI
 			if (evPresent) {
-				loc = Location(fftAnal[i], detectedBands, i);
-				cycles = 0;
+				if (cycles == 0) { dir = Direction(fftAnal[s], fftAnal[!s]); } // Only run direction on two consecutive detections
+				loc = Location(fftAnal[s], detectedBands, s);
+				cycles = 0;   // 0 windows since last detection
 				evPresent = false;
 			} else {
 				cycles++;
 			}			
 			
-			update_display(cycles, loc, dir[loc]);
+			update_display(cycles, loc, dir);
 			
 			auto end = std::chrono::high_resolution_clock::now();
 			double tim = std::chrono::duration_cast<std::chrono::milliseconds>(end-begin).count();
@@ -396,11 +415,13 @@ int main()
 	}
 	
 	// Free resources
-	for (int i = 0; i < N_CH; i++) {
-		free(in[0][i]); free(in[1][i]); free(inRev[i]);
+	for (int s = 0; s < S; s++) {
+		for (int ch = 0; ch < N_CH; ch++) {
+			free(in[s][ch]);
+		}
 	}
-	fftw_destroy_plan(fftV.p[0]);
-	fftw_destroy_plan(fftV.p[1]);
+	free(inRev);
+	fftw_destroy_plan(fftV.p);
 	fftw_free(fftV.out);
 	free(fftV.absFFT);
 	

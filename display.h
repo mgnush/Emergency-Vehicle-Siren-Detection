@@ -15,10 +15,10 @@ enum direction {
 };
 
 enum location {
+	east,
 	south,
 	west,
-	north,
-	east
+	north
 };
 
 void initialize_display_pins();
