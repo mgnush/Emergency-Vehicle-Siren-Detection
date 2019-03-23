@@ -11,6 +11,7 @@
 #include <fstream>
 #include <string>
 #include <list>
+#include <array>
 #include "display.h"
 
 // Extreme doppler effect coefficients
@@ -280,6 +281,7 @@ void SplitWindowDetection(multi_thresh_indeces mtIndeces, int &detections, doubl
  * \param[in] fftAnalCur The FFT-analysis for the second window
  * \param[in] detectedBands[2][BANDS] The two detection results
  */
+ /*
 direction Direction(const fft_analysis (&fftAnalPrev)[N_CH], fft_analysis (&fftAnalCur)[N_CH]) 
 {
 	double rel[N_CH];
@@ -313,14 +315,73 @@ direction Direction(const fft_analysis (&fftAnalPrev)[N_CH], fft_analysis (&fftA
 		printf("Detected direction is inconclusive at %f. \n", relAvg);
 		return no_dir;
 	}
-}
+} */
 
-location Location(const fft_analysis (&fftAnals)[N_CH], const int (&detectedBands)[N_CH][2][BANDS], const int &i) 
+direction Direction(std::array<std::list<fft_analysis>, N_CH> fftAnals) 
+{
+	double rel[N_CH];
+	double relAvg = 0;
+	
+	for (int ch = 0; ch < N_CH; ch++) {
+		double windowAvgs[S] = { 0 };   // l <= S
+		for (fft_analysis l : fftAnals[ch]) {
+			int s = 0;
+			for (int j = 0; j < BANDS; j++) {
+				windowAvgs[s] += l.bandAvgs[j];
+			}
+			windowAvgs[s] = windowAvgs[s] / BANDS;
+			s++;
+		}
+		
+		for (int s = 1; s < fftAnals.size(); s++) {
+			relAvg += windowAvgs[s] / windowAvgs[s - 1];
+		}
+	}
+	
+	relAvg = relAvg /= (fftAnals.size() * N_CH);
+	
+	if (relAvg > (1 + DIR_MARGIN)) {
+		printf("Detected EV is approaching at %f. \n", relAvg);
+		return approaching;
+	}
+	else if (relAvg < (1 - DIR_MARGIN)) {
+		printf("Detected EV is moving away at %f. \n", relAvg);
+		return receding;
+	}
+	else {
+		printf("Detected direction is inconclusive at %f. \n", relAvg);
+		return no_dir;
+	}
+} 
+
+/*location Location(const fft_analysis (&fftAnals)[N_CH], const int (&detectedBands)[N_CH][2][BANDS], const int &i) 
 {
 	double windowAvgs[N_CH] = { 0 };
 	for (int ch = 0; ch < N_CH; ch++) {
 		for (int j = 0; j < BANDS; j++) {
 			windowAvgs[ch] += (fftAnals[ch].bandAvgs[j] * detectedBands[ch][i][j]);
+		}
+		windowAvgs[ch] = windowAvgs[ch] / BANDS;
+	}
+	
+	location loc = (location)0;
+	for (int ch = 1; ch < N_CH; ch++) {
+		double rel = windowAvgs[ch] / windowAvgs[ch - 1];
+		if (rel > (1 + 0)) {
+			loc = (location)ch;
+		} 
+	}
+	printf("The EV was detected in direction %d. \n", loc);
+	
+	return loc;
+}*/
+
+location Location(std::array<std::list<fft_analysis>, N_CH> fftAnals, const int (&detectedBands)[N_CH][2][BANDS], const int &i) 
+{
+	double windowAvgs[N_CH] = { 0 };
+	for (int ch = 0; ch < N_CH; ch++) {
+		for (int j = 0; j < BANDS; j++) {
+			windowAvgs[ch] += (fftAnals[ch].back().bandAvgs[j] * detectedBands[ch][i][j]);
 		}
 		windowAvgs[ch] = windowAvgs[ch] / BANDS;
 	}
@@ -358,8 +419,8 @@ int main()
 		}
 	}
 	inRev = (double*)malloc(sizeof(double) * N);
-	//std::list<fft_analysis[N_CH]> fftAnals;
-	fft_analysis fftAnal[S][N_CH];
+	std::array<std::list<fft_analysis>, N_CH> fftAnals;
+	//fft_analysis fftAnal[S][N_CH];
 	int detectedBands[N_CH][S][BANDS];
 	int detections[N_CH];
 	location loc;
@@ -379,27 +440,30 @@ int main()
 			for (int ch = 0; ch < N_CH; ch++) {
 				printf("Channel %d: ", ch); 
 				
-				fftAnal[s][ch] = DoFFT(fftV, in[s][ch], mtIndeces, false, 0);
-				detections[ch] = Detect(fftAnal[s][ch], detectedBands[ch][s]);
+				//fftAnal[s][ch] = DoFFT(fftV, in[s][ch], mtIndeces, false, 0);
+				fftAnals[ch].push_back(DoFFT(fftV, in[s][ch], mtIndeces, false, 0));
+				detections[ch] = Detect(fftAnals[ch].back(), detectedBands[ch][s]);
 				
 				// TESTING ONLY
 				//FftPrint("mcp3008test.txt", fftV.absFFT, (double)fs / (double)n);
 				
 				if (((detections[ch] > 0) && (detections[ch] <= (BANDS / 2))) && (!firstRunFlag)) { 
-					SplitWindowDetection(mtIndeces, detections[ch], in, inRev, fftAnal[s][ch], fftV, s, ch); 
+					SplitWindowDetection(mtIndeces, detections[ch], in, inRev, fftAnals[ch].back(), fftV, s, ch); 
 				} 
 				
 				printf("Siren was detected in %d out of %d bands \n", detections[ch], BANDS);
 				
 				evPresent = (detections[ch] > (BANDS / 2) );   // Detection verdict - only one channel needs to detect
-
-				firstRunFlag = false; 
+				
+				if (fftAnals[ch].size() > S) { fftAnals[ch].pop_front(); }
+				
+				firstRunFlag = false;
 			}
 			
 			// Direction, Location, UI
 			if (evPresent) {
-				if (cycles == 0) { dir = Direction(fftAnal[s], fftAnal[!s]); } // Only run direction on two consecutive detections
-				loc = Location(fftAnal[s], detectedBands, s);
+				if (cycles == 0) { dir = Direction(fftAnals); } // Only run direction on two consecutive detections
+				loc = Location(fftAnals, detectedBands, s);
 				cycles = 0;   // 0 windows since last detection
 				evPresent = false;
 			} else {
