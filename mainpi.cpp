@@ -34,7 +34,7 @@ const double fs = 8000;   // 8kHz sampling
 const int N = 16464;   // # of samples
 const int N_CH = 3;   // # of Mics
 const char CHANNELS[4] = {0x80,0x90,0xb0,0xb0};   // Code to send to ADC
-const int S = 2;   // # of windows to store (per channel)
+const int S = 4;   // # of windows to store (per channel)
 const int S_FFT = 4;	// # of consecutive fft-analysis to store
 // Testing-tuned microsecond delay to achieve 8kHz sampling
 const int SAMPLE_DELAY = 21; //55; //21;  //87;  //90; //
@@ -281,51 +281,15 @@ void SplitWindowDetection(multi_thresh_indeces mtIndeces, int &detections, doubl
  * \param[in] fftAnalCur The FFT-analysis for the second window
  * \param[in] detectedBands[2][BANDS] The two detection results
  */
- /*
-direction Direction(const fft_analysis (&fftAnalPrev)[N_CH], fft_analysis (&fftAnalCur)[N_CH]) 
+direction Direction(const std::array<std::list<fft_analysis>, N_CH> fftAnals) 
 {
 	double rel[N_CH];
 	double relAvg = 0;
 	
 	for (int ch = 0; ch < N_CH; ch++) {
-		double windowAvgs[2] = { 0 };
-
-		for (int j = 0; j < BANDS; j++) {
-			windowAvgs[0] += (fftAnalPrev[ch].bandAvgs[j]);
-			windowAvgs[1] += (fftAnalCur[ch].bandAvgs[j]); 
-		}
-		windowAvgs[0] = windowAvgs[0] / BANDS;
-		windowAvgs[1] = windowAvgs[1] / BANDS;
-
-		rel[ch] = windowAvgs[1] / windowAvgs[0];
-		relAvg += rel[ch];
-	}
-	
-	relAvg = relAvg /= N_CH;
-	
-	if (relAvg > (1 + DIR_MARGIN)) {
-		printf("Detected EV is approaching at %f. \n", relAvg);
-		return approaching;
-	}
-	else if (relAvg < (1 - DIR_MARGIN)) {
-		printf("Detected EV is moving away at %f. \n", relAvg);
-		return receding;
-	}
-	else {
-		printf("Detected direction is inconclusive at %f. \n", relAvg);
-		return no_dir;
-	}
-} */
-
-direction Direction(std::array<std::list<fft_analysis>, N_CH> fftAnals) 
-{
-	double rel[N_CH];
-	double relAvg = 0;
-	
-	for (int ch = 0; ch < N_CH; ch++) {
+		int s = 0;
 		double windowAvgs[S] = { 0 };   // l <= S
 		for (fft_analysis l : fftAnals[ch]) {
-			int s = 0;
 			for (int j = 0; j < BANDS; j++) {
 				windowAvgs[s] += l.bandAvgs[j];
 			}
@@ -353,28 +317,6 @@ direction Direction(std::array<std::list<fft_analysis>, N_CH> fftAnals)
 		return no_dir;
 	}
 } 
-
-/*location Location(const fft_analysis (&fftAnals)[N_CH], const int (&detectedBands)[N_CH][2][BANDS], const int &i) 
-{
-	double windowAvgs[N_CH] = { 0 };
-	for (int ch = 0; ch < N_CH; ch++) {
-		for (int j = 0; j < BANDS; j++) {
-			windowAvgs[ch] += (fftAnals[ch].bandAvgs[j] * detectedBands[ch][i][j]);
-		}
-		windowAvgs[ch] = windowAvgs[ch] / BANDS;
-	}
-	
-	location loc = (location)0;
-	for (int ch = 1; ch < N_CH; ch++) {
-		double rel = windowAvgs[ch] / windowAvgs[ch - 1];
-		if (rel > (1 + 0)) {
-			loc = (location)ch;
-		} 
-	}
-	printf("The EV was detected in direction %d. \n", loc);
-	
-	return loc;
-}*/
 
 location Location(std::array<std::list<fft_analysis>, N_CH> fftAnals, const int (&detectedBands)[N_CH][2][BANDS], const int &i) 
 {
@@ -409,10 +351,10 @@ int main()
 	
 	double timeSpan; // Actual sampling time
 	bool firstRunFlag = true; // Prevent 'empty' array from being used
-	bool evPresent = false;
-	double *in[S][N_CH]; // Store S consecutive sampling windows at a time for each channel
+	int evPresent = 0;
+	double *in[2][N_CH]; // Store 2 consecutive sampling windows at a time for each channel
 	double *inRev;
-	for (int s = 0; s < S; s++) {
+	for (int s = 0; s < 2; s++) {
 		for (int ch = 0; ch < N_CH; ch++) {
 			in[s][ch] = (double*)malloc(sizeof(double) * N);
 			in[s][ch] = (double*)malloc(sizeof(double) * N);
@@ -421,7 +363,7 @@ int main()
 	inRev = (double*)malloc(sizeof(double) * N);
 	std::array<std::list<fft_analysis>, N_CH> fftAnals;
 	//fft_analysis fftAnal[S][N_CH];
-	int detectedBands[N_CH][S][BANDS];
+	int detectedBands[N_CH][2][BANDS];
 	int detections[N_CH];
 	location loc;
 	direction dir;
@@ -430,7 +372,7 @@ int main()
 	
 	while (1) {
 		
-		for (int s = 0; s < S; s++) {
+		for (int s = 0; s < 2; s++) {
 			timeSpan = DoSampling(in[s]);		
 			printf("The sampling window of %d samples was %f seconds \n", N, timeSpan);
 			
@@ -453,7 +395,7 @@ int main()
 				
 				printf("Siren was detected in %d out of %d bands \n", detections[ch], BANDS);
 				
-				evPresent = (detections[ch] > (BANDS / 2) );   // Detection verdict - only one channel needs to detect
+				evPresent += (detections[ch] > (BANDS / 2) );   // Detection verdict - only one channel needs to detect
 				
 				if (fftAnals[ch].size() > S) { fftAnals[ch].pop_front(); }
 				
@@ -465,7 +407,7 @@ int main()
 				if (cycles == 0) { dir = Direction(fftAnals); } // Only run direction on two consecutive detections
 				loc = Location(fftAnals, detectedBands, s);
 				cycles = 0;   // 0 windows since last detection
-				evPresent = false;
+				evPresent = 0;
 			} else {
 				cycles++;
 			}			
