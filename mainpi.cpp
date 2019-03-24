@@ -15,8 +15,8 @@
 #include "display.h"
 
 // Extreme doppler effect coefficients
-const double DOPPLER_MIN = 0.8491;
-const double DOPPLER_MAX = 1.0425;
+const double DOPPLER_MIN = 0.9592;
+const double DOPPLER_MAX = 1.1777;
 // Define frequency band of interest
 const double BAND_FREQ_MIN  =700;
 const double BAND_FREQ_MAX = 1550;
