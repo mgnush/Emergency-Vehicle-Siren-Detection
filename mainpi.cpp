@@ -27,15 +27,14 @@ const double NOISE_HIGHMIN = 1885;
 const double NOISE_HIGHMAX = 3000;
 // Number of bands for multithresholding
 const int BANDS = 6;
-const double NOISE_COEFF[BANDS] = {2.6,2.5,2.8,2.9,2.9,2.8};   //{2.6,2.5,2.6,2.5,2.7,2.5}; //{2.6,2.5,2.3,2.4}; 
+const double NOISE_COEFF[BANDS] = {2.6,2.5,2.8,2.9,2.5,2.4};   //{2.6,2.5,2.6,2.5,2.7,2.5}; //{2.6,2.5,2.3,2.4}; 
 // Sampling constants (might need to check in program)
 const double st = 2.058;   // Sampling time
 const double fs = 8000;   // 8kHz sampling
 const int N = 16464;   // # of samples
 const int N_CH = 3;   // # of Mics
 const char CHANNELS[4] = {0x80,0x90,0xb0,0xb0};   // Code to send to ADC
-const int S = 4;   // # of windows to store (per channel)
-const int S_FFT = 4;	// # of consecutive fft-analysis to store
+const int S = 4;   // # of fft_analysis to store (per channel)
 // Testing-tuned microsecond delay to achieve 8kHz sampling
 const int SAMPLE_DELAY = 21; //55; //21;  //87;  //90; //
 // FFT-variables

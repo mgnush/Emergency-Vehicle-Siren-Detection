@@ -15,9 +15,9 @@ enum direction {
 };
 
 enum location {
-	east,
 	south,
 	west,
+	east,
 	north
 };
 
