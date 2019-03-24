@@ -27,14 +27,14 @@ const double NOISE_HIGHMIN = 1885;
 const double NOISE_HIGHMAX = 3000;
 // Number of bands for multithresholding
 const int BANDS = 6;
-const double NOISE_COEFF[BANDS] = {2.6,2.5,2.8,2.9,2.5,2.4};   //{2.6,2.5,2.6,2.5,2.7,2.5}; //{2.6,2.5,2.3,2.4}; 
+const double NOISE_COEFF[BANDS] = {2.6,2.5,2.5,2.5,2.5,2.4};   //{2.6,2.5,2.6,2.5,2.7,2.5}; //{2.6,2.5,2.3,2.4}; 
 // Sampling constants (might need to check in program)
 const double st = 2.058;   // Sampling time
 const double fs = 8000;   // 8kHz sampling
 const int N = 16464;   // # of samples
 const int N_CH = 3;   // # of Mics
 const char CHANNELS[4] = {0x80,0x90,0xb0,0xb0};   // Code to send to ADC
-const int S = 4;   // # of fft_analysis to store (per channel)
+const int S = 3;   // # of fft_analysis to store (per channel)
 // Testing-tuned microsecond delay to achieve 8kHz sampling
 const int SAMPLE_DELAY = 21; //55; //21;  //87;  //90; //
 // FFT-variables
@@ -303,6 +303,8 @@ direction Direction(const std::array<std::list<fft_analysis>, N_CH> fftAnals)
 	
 	relAvg = relAvg /= (fftAnals.size() * N_CH);
 	
+	printf("THERE IS A PROBLEM MOITE. S APPEARS TO BE %d", fftAnals.size());
+	
 	if (relAvg > (1 + DIR_MARGIN)) {
 		printf("Detected EV is approaching at %f. \n", relAvg);
 		return approaching;
@@ -317,12 +319,12 @@ direction Direction(const std::array<std::list<fft_analysis>, N_CH> fftAnals)
 	}
 } 
 
-location Location(std::array<std::list<fft_analysis>, N_CH> fftAnals, const int (&detectedBands)[N_CH][2][BANDS], const int &i) 
+location Location(std::array<std::list<fft_analysis>, N_CH> fftAnals, const int (&detectedBands)[N_CH][2][BANDS]) 
 {
 	double windowAvgs[N_CH] = { 0 };
 	for (int ch = 0; ch < N_CH; ch++) {
 		for (int j = 0; j < BANDS; j++) {
-			windowAvgs[ch] += (fftAnals[ch].back().bandAvgs[j] * detectedBands[ch][i][j]);
+			windowAvgs[ch] += (fftAnals[ch].back().bandAvgs[j]); 
 		}
 		windowAvgs[ch] = windowAvgs[ch] / BANDS;
 	}
@@ -365,7 +367,7 @@ int main()
 	int detectedBands[N_CH][2][BANDS];
 	int detections[N_CH];
 	location loc;
-	direction dir;
+	direction dir = no_dir;
 	int cycles = 0; // # of sampling windows since last detection
 	//std::string exit;
 	
@@ -381,7 +383,6 @@ int main()
 			for (int ch = 0; ch < N_CH; ch++) {
 				printf("Channel %d: ", ch); 
 				
-				//fftAnal[s][ch] = DoFFT(fftV, in[s][ch], mtIndeces, false, 0);
 				fftAnals[ch].push_back(DoFFT(fftV, in[s][ch], mtIndeces, false, 0));
 				detections[ch] = Detect(fftAnals[ch].back(), detectedBands[ch][s]);
 				
@@ -404,15 +405,16 @@ int main()
 			// Direction, Location, UI
 			if (evPresent) {
 				if (cycles == 0) { dir = Direction(fftAnals); } // Only run direction on two consecutive detections
-				loc = Location(fftAnals, detectedBands, s);
+				loc = Location(fftAnals, detectedBands);
 				cycles = 0;   // 0 windows since last detection
 				evPresent = 0;
 			} else {
 				cycles++;
-			}			
-			
+				dir = no_dir;
+			}		
+				
 			update_display(cycles, loc, dir);
-			
+						
 			auto end = std::chrono::high_resolution_clock::now();
 			double tim = std::chrono::duration_cast<std::chrono::milliseconds>(end-begin).count();
 			printf("Algorithms took %.1fms \n \n", tim);
