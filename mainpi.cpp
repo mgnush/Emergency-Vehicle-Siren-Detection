@@ -19,24 +19,24 @@ const double DOPPLER_MIN = 0.9592;
 const double DOPPLER_MAX = 1.1777;
 // Define frequency band of interest
 const double BAND_FREQ_MIN  =700;
-const double BAND_FREQ_MAX = 1550;
+const double BAND_FREQ_MAX = 1600;
 // Frequencies for multithresholding
-const double NOISE_LOWMIN = 200;
+const double NOISE_LOWMIN = 250;
 const double NOISE_LOWMAX = 500;
 const double NOISE_HIGHMIN = 1885;
 const double NOISE_HIGHMAX = 3000;
 // Number of bands for multithresholding
 const int BANDS = 6;
-const double NOISE_COEFF[BANDS] = {2.6,2.5,2.5,2.5,2.5,2.4};   //{2.6,2.5,2.6,2.5,2.7,2.5}; //{2.6,2.5,2.3,2.4}; 
+const double NOISE_COEFF[BANDS] = {3.2,3.0,3.2,2.8,2.8,3.2};   //{2.6,2.5,2.6,2.5,2.7,2.5}; //{2.6,2.5,2.3,2.4}; 
 // Sampling constants (might need to check in program)
 const double st = 2.058;   // Sampling time
 const double fs = 8000;   // 8kHz sampling
 const int N = 16464;   // # of samples
-const int N_CH = 3;   // # of Mics
-const char CHANNELS[4] = {0x80,0x90,0xb0,0xb0};   // Code to send to ADC
-const int S = 3;   // # of fft_analysis to store (per channel)
+const int N_CH = 4;   // # of Mics
+const char CHANNELS[4] = {0x80,0x90,0xa0,0xb0};   // Code to send to ADC
+const int S = 2;   // # of fft_analysis to store (per channel)
 // Testing-tuned microsecond delay to achieve 8kHz sampling
-const int SAMPLE_DELAY = 21; //55; //21;  //87;  //90; //
+const int SAMPLE_DELAY = 55; //55; //21;  //87;  //90; //
 // FFT-variables
 const bool DOPPLER = true;
 // Direction, location constants
@@ -87,7 +87,7 @@ void SpiSetup()
 	bcm2835_spi_begin();
 	bcm2835_spi_setBitOrder(BCM2835_SPI_BIT_ORDER_MSBFIRST);
 	bcm2835_spi_setDataMode(BCM2835_SPI_MODE0); // Data comes in on falling edge
-	bcm2835_spi_setClockDivider(BCM2835_SPI_CLOCK_DIVIDER_512); // 250MHz / 256 = ~1000kHz
+	bcm2835_spi_setClockDivider(BCM2835_SPI_CLOCK_DIVIDER_256); // 250MHz / 256 = ~1000kHz
 	bcm2835_spi_chipSelect(BCM2835_SPI_CS0);
 	bcm2835_spi_setChipSelectPolarity(BCM2835_SPI_CS0, LOW);
 }
@@ -186,9 +186,12 @@ fft_analysis DoFFT(fft_vars &vars, const double *samples, const multi_thresh_ind
 	for (int j = 0; j < n; j++) {
 		vars.window[j] = samples[n*i+j];
 	}
-
+	auto begin = std::chrono::high_resolution_clock::now();
 	fftw_execute(vars.p); // Repeatable
-
+	auto end = std::chrono::high_resolution_clock::now();
+	
+	printf("\n FFT execution time was %f ms \n", std::chrono::duration_cast<std::chrono::microseconds>(end-begin).count() / 1000.0);
+	
 	// Obtain absolute, normalised FFT
 	vars.absFFT[0] = vars.out[0][0] / n;
 	for (int j = 1; j < (n/ 2 - 1); j++) {
@@ -296,14 +299,12 @@ direction Direction(const std::array<std::list<fft_analysis>, N_CH> fftAnals)
 			s++;
 		}
 		
-		for (int s = 1; s < fftAnals.size(); s++) {
+		for (int s = 1; s < fftAnals[0].size(); s++) {
 			relAvg += windowAvgs[s] / windowAvgs[s - 1];
 		}
 	}
 	
-	relAvg = relAvg /= (fftAnals.size() * N_CH);
-	
-	printf("THERE IS A PROBLEM MOITE. S APPEARS TO BE %d", fftAnals.size());
+	relAvg = relAvg /= (fftAnals[0].size() * N_CH);   // Divide by number of consecutive samples & number of channels
 	
 	if (relAvg > (1 + DIR_MARGIN)) {
 		printf("Detected EV is approaching at %f. \n", relAvg);
@@ -330,9 +331,10 @@ location Location(std::array<std::list<fft_analysis>, N_CH> fftAnals, const int 
 	}
 	
 	location loc = (location)0;
+	double maxAvg = windowAvgs[0];
 	for (int ch = 1; ch < N_CH; ch++) {
-		double rel = windowAvgs[ch] / windowAvgs[ch - 1];
-		if (rel > (1 + 0)) {
+		if (windowAvgs[ch] > maxAvg) {
+			maxAvg = windowAvgs[ch];
 			loc = (location)ch;
 		} 
 	}
@@ -368,7 +370,7 @@ int main()
 	int detections[N_CH];
 	location loc;
 	direction dir = no_dir;
-	int cycles = 0; // # of sampling windows since last detection
+	int cycles = MAX_CYCLES + 1; // # of sampling windows since last detection. init to prevent dir being run on first det
 	//std::string exit;
 	
 	while (1) {
@@ -397,7 +399,7 @@ int main()
 				
 				evPresent += (detections[ch] > (BANDS / 2) );   // Detection verdict - only one channel needs to detect
 				
-				if (fftAnals[ch].size() > S) { fftAnals[ch].pop_front(); }
+				if (fftAnals[ch].size() > S) { fftAnals[ch].pop_front(); }	// Maintain list to specified length
 				
 				firstRunFlag = false;
 			}
@@ -422,7 +424,7 @@ int main()
 	}
 	
 	// Free resources
-	for (int s = 0; s < S; s++) {
+	for (int s = 0; s < 2; s++) {
 		for (int ch = 0; ch < N_CH; ch++) {
 			free(in[s][ch]);
 		}

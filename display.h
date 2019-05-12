@@ -6,7 +6,7 @@
 #define PIN3 RPI_BPLUS_GPIO_J8_15
 #define PIN4 RPI_BPLUS_GPIO_J8_16
 
-const int MAX_CYCLES = 3;
+const int MAX_CYCLES = 2;
 
 enum direction {
 	approaching,
@@ -15,10 +15,10 @@ enum direction {
 };
 
 enum location {
-	south,
-	west,
 	east,
-	north
+	north,
+	west,
+	south
 };
 
 void initialize_display_pins();
