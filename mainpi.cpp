@@ -41,6 +41,7 @@ const int SAMPLE_DELAY = 55; //55; //21;  //87;  //90; //
 const bool DOPPLER = true;
 // Direction, location constants
 const double DIR_MARGIN = 0.02;
+const double LOC_MARGIN = 0.1;  // Used to compare two opposite sides if wall echo is suspected 
 
 struct multi_thresh_indeces {
 	int bandIndeces[BANDS + 1];
@@ -186,11 +187,8 @@ fft_analysis DoFFT(fft_vars &vars, const double *samples, const multi_thresh_ind
 	for (int j = 0; j < n; j++) {
 		vars.window[j] = samples[n*i+j];
 	}
-	auto begin = std::chrono::high_resolution_clock::now();
-	fftw_execute(vars.p); // Repeatable
-	auto end = std::chrono::high_resolution_clock::now();
 	
-	printf("\n FFT execution time was %f ms \n", std::chrono::duration_cast<std::chrono::microseconds>(end-begin).count() / 1000.0);
+	fftw_execute(vars.p); // Repeatable
 	
 	// Obtain absolute, normalised FFT
 	vars.absFFT[0] = vars.out[0][0] / n;
@@ -284,28 +282,23 @@ void SplitWindowDetection(multi_thresh_indeces mtIndeces, int &detections, doubl
  * \param[in] fftAnalCur The FFT-analysis for the second window
  * \param[in] detectedBands[2][BANDS] The two detection results
  */
-direction Direction(const std::array<std::list<fft_analysis>, N_CH> fftAnals) 
+direction Direction(const std::array<std::list<fft_analysis>, N_CH> fftAnals, location loc) 
 {
-	double rel[N_CH];
 	double relAvg = 0;
 	
-	for (int ch = 0; ch < N_CH; ch++) {
-		int s = 0;
-		double windowAvgs[S] = { 0 };   // l <= S
-		for (fft_analysis l : fftAnals[ch]) {
-			for (int j = 0; j < BANDS; j++) {
-				windowAvgs[s] += l.bandAvgs[j];
-			}
-			windowAvgs[s] = windowAvgs[s] / BANDS;
-			s++;
+	int s = 0;
+	double windowAvgs[S] = { 0 };   // l <= S
+	for (fft_analysis l : fftAnals[(int)loc % N_CH]) {
+		for (int j = 0; j < BANDS; j++) {
+			windowAvgs[s] += l.bandAvgs[j] * (l.bandAvgs[j] >= NOISE_COEFF[j]);
 		}
-		
-		for (int s = 1; s < fftAnals[0].size(); s++) {
-			relAvg += windowAvgs[s] / windowAvgs[s - 1];
-		}
+		windowAvgs[s] = windowAvgs[s] / BANDS;
+		s++;
 	}
 	
-	relAvg = relAvg /= (fftAnals[0].size() * N_CH);   // Divide by number of consecutive samples & number of channels
+	for (int s = 1; s < fftAnals[0].size(); s++) {
+		relAvg += windowAvgs[s] / windowAvgs[s - 1];
+	}
 	
 	if (relAvg > (1 + DIR_MARGIN)) {
 		printf("Detected EV is approaching at %f. \n", relAvg);
@@ -332,13 +325,22 @@ location Location(std::array<std::list<fft_analysis>, N_CH> fftAnals, const int 
 	}
 	
 	location loc = (location)0;
+
 	double maxAvg = windowAvgs[0];
 	for (int ch = 1; ch < N_CH; ch++) {
 		if (windowAvgs[ch] > maxAvg) {
 			maxAvg = windowAvgs[ch];
 			loc = (location)ch;
-		} 
+		} 		
 	}
+	
+	// If the indicated location and the opposite side are within LOC_MARGIN % of each other,
+	// a wall might be present. Conclude that location can't be determined confidently
+	if (maxAvg < (1+LOC_MARGIN) * windowAvgs[((int)loc + 2) % N_CH]) {
+		loc = no_loc;
+	}
+		
+		
 	printf("The EV was detected in direction %d. \n", loc);
 	
 	return loc;
@@ -406,9 +408,9 @@ int main()
 			}
 			
 			// Direction, Location, UI
-			if (evPresent) {
-				if (cycles == 0) { dir = Direction(fftAnals); } // Only run direction on two consecutive detections
+			if (evPresent) {				
 				loc = Location(fftAnals, detectedBands);
+				if (cycles == 0) { dir = Direction(fftAnals, loc); } // Only run direction on two consecutive detections
 				cycles = 0;   // 0 windows since last detection
 				evPresent = 0;
 			} else {

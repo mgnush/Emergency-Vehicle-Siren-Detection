@@ -18,7 +18,8 @@ enum location {
 	east,
 	north,
 	west,
-	south
+	south,
+	no_loc
 };
 
 void initialize_display_pins();
