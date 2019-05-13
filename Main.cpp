@@ -139,8 +139,11 @@ multi_thresh_indeces setupMultiThresholding(const int &n, const int &fs, const b
 fft_vars setupFFT(const int &nWindow) {
 	fft_vars vars;
 	vars.window = (double*)malloc(sizeof(double) * 2 * (nWindow / 2 - 1));
-	vars.out = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * 2 * (nWindow / 2 - 1));   // In-place fft requires in and out to accomodate two out-arrays   // Complex 1D, n/2-1 length output
-	vars.p = fftw_plan_dft_r2c_1d(nWindow, vars.window, vars.out, FFTW_ESTIMATE); // MEASURE consumes extra time on initial plan execution. ESTIMATE has no initial timecost.
+	vars.out = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * 2 * (nWindow / 2 - 1));   // In-place fft requires in and 
+																						   // out to accomodate two out-arrays   
+																						   // Complex 1D, n/2-1 length output
+	vars.p = fftw_plan_dft_r2c_1d(nWindow, vars.window, vars.out, FFTW_ESTIMATE); // MEASURE consumes extra time on initial 
+																				  // plan execution. ESTIMATE has no initial timecost.
 	vars.absFFT = (double*)malloc(sizeof(double) * (nWindow / 2 - 1));	
 
 	return vars;
@@ -151,7 +154,7 @@ fft_analysis doFFT(fft_vars vars, const rec_data &rec, const multi_thresh_indece
 
 	// SPLIT up sound file
 	for (int j = 0; j < rec.channels * nWindow; j += rec.channels) {
-		vars.window[j >> (rec.channels >> 1)] = rec.samples[i*nWindow + j]; // Ignore all channels but channel 0 NB: CANT HAVE UNEVEN NUMBER OF CHANNELS
+		vars.window[j >> (rec.channels >> 1)] = rec.samples[i*nWindow + j]; // Ignore all channels but channel 0 
 	}
 	fftw_execute(vars.p); // Repeatable
 
@@ -169,7 +172,8 @@ fft_analysis doFFT(fft_vars vars, const rec_data &rec, const multi_thresh_indece
 	for (long j = mtIndeces.noiseIndexHighMin; j < mtIndeces.noiseIndexHighMax; j++) {
 		totalNoise += vars.absFFT[j];
 	}
-	fftAnal.noiseThresh = noiseMultiplier * totalNoise / ((mtIndeces.noiseIndexLowMax - mtIndeces.noiseIndexLowMin) + (mtIndeces.noiseIndexHighMax - mtIndeces.noiseIndexHighMin));
+	fftAnal.noiseThresh = noiseMultiplier * totalNoise / ((mtIndeces.noiseIndexLowMax - mtIndeces.noiseIndexLowMin) 
+		+ (mtIndeces.noiseIndexHighMax - mtIndeces.noiseIndexHighMin));
 
 	// Obtain BoI (Bands of Interest) levels
 	double totalVol[BANDS] = { 0 };

@@ -27,7 +27,7 @@ const double NOISE_HIGHMIN = 1885;
 const double NOISE_HIGHMAX = 3000;
 // Number of bands for multithresholding
 const int BANDS = 6;
-const double NOISE_COEFF[BANDS] = {3.2,3.0,3.2,2.8,2.8,3.2};   //{2.6,2.5,2.6,2.5,2.7,2.5}; //{2.6,2.5,2.3,2.4}; 
+const double NOISE_COEFF[BANDS] = {3.2,3.0,3.2,2.8,2.8,3.2};  
 // Sampling constants (might need to check in program)
 const double st = 2.058;   // Sampling time
 const double fs = 8000;   // 8kHz sampling
@@ -160,7 +160,7 @@ fft_vars SetupFFT() {
 	fft_vars vars;
 	
 	vars.window = (double*)malloc(sizeof(double) * 2 * (N / 2 - 1));
-	vars.out = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * 2 * (N / 2 - 1));   // In-place fft requires in and out to accomodate two out-arrays   // Complex 1D, n/2-1 length output
+	vars.out = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * 2 * (N / 2 - 1));   // In-place fft requires in and out to accomodate two out-arrays 
 	vars.p = fftw_plan_dft_r2c_1d(N, vars.window, vars.out, FFTW_ESTIMATE); // MEASURE consumes extra time on initial plan execution. ESTIMATE has no initial timecost.
 	vars.absFFT = (double*)malloc(sizeof(double) * (N / 2 - 1));	
 
@@ -206,7 +206,8 @@ fft_analysis DoFFT(fft_vars &vars, const double *samples, const multi_thresh_ind
 	for (int j = mtIndeces.noiseIndexHighMin; j < mtIndeces.noiseIndexHighMax; j++) {
 		totalNoise += vars.absFFT[j];
 	}
-	fftAnal.noiseThresh = totalNoise / ((mtIndeces.noiseIndexLowMax - mtIndeces.noiseIndexLowMin) + (mtIndeces.noiseIndexHighMax - mtIndeces.noiseIndexHighMin));
+	fftAnal.noiseThresh = totalNoise / ((mtIndeces.noiseIndexLowMax - mtIndeces.noiseIndexLowMin) + 
+		(mtIndeces.noiseIndexHighMax - mtIndeces.noiseIndexHighMin));
 
 	// Obtain BoI (Bands of Interest) levels
 	double totalVol[BANDS] = { 0 };
