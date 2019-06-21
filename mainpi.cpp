@@ -14,6 +14,7 @@
 #include <array>
 #include "display.h"
 
+
 // Extreme doppler effect coefficients
 const double DOPPLER_MIN = 0.9592;
 const double DOPPLER_MAX = 1.1777;
@@ -70,6 +71,7 @@ void FftPrint(const char* fileName, double *data, const double df)
 	myFile.open(fileName);
 
 	for (int i = 0; i < N/2-1; i++) {
+
 		myFile << (double)i*df << ": " << data[i]*(N/2) << "\n";
 	}
 	myFile.close();
